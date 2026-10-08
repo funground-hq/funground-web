@@ -1,0 +1,81 @@
+projects-02_rangoli x1: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         275400 function calls in 0.143 seconds
+
+   Ordered by: internal time
+   List reduced from 127 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      315    0.017    0.000    0.029    0.000 pathops.py:92(_combine)
+     1245    0.012    0.000    0.022    0.000 dataclasses.py:1782(_replace)
+     5865    0.007    0.000    0.023    0.000 sketch.py:1662(circle)
+     9540    0.005    0.000    0.013    0.000 sketch.py:809(_emit)
+     1005    0.005    0.000    0.019    0.000 color.py:365(parse_in_mode)
+    40140    0.005    0.000    0.005    0.000 {built-in method builtins.getattr}
+      315    0.004    0.000    0.006    0.000 pathops.py:61(from_skia)
+       60    0.004    0.000    0.109    0.002 02_rangoli.py:98(draw_petal_ring)
+      630    0.004    0.000    0.006    0.000 pathops.py:43(to_skia)
+    30390    0.003    0.000    0.003    0.000 {built-in method builtins.isinstance}
+     9540    0.003    0.000    0.007    0.000 sketch.py:813(_append)
+    11175    0.003    0.000    0.004    0.000 api.py:165(active_sketch)
+     5865    0.003    0.000    0.029    0.000 api.py:821(circle)
+    18435    0.003    0.000    0.003    0.000 {method 'append' of 'list' objects}
+     9540    0.002    0.000    0.004    0.000 ir.py:252(append)
+     1005    0.002    0.000    0.023    0.000 sketch.py:1207(read_color)
+     1005    0.002    0.000    0.004    0.000 color.py:343(_hue_and_percents)
+     1005    0.002    0.000    0.012    0.000 color.py:193(from_hsb)
+     5865    0.002    0.000    0.003    0.000 sketch.py:1650(_ellipse_box)
+       15    0.002    0.000    0.158    0.011 02_rangoli.py:132(draw_pattern)
+      480    0.002    0.000    0.004    0.000 geometry.py:409(rect_radii)
+    12705    0.002    0.000    0.002    0.000 sketch.py:192(style)
+     1005    0.002    0.000    0.002    0.000 color.py:41(__post_init__)
+      180    0.001    0.000    0.004    0.000 geometry.py:390(transformed)
+     3930    0.001    0.000    0.002    0.000 enum.py:677(__call__)
+      630    0.001    0.000    0.002    0.000 pathops.py:19(_closed_subpaths)
+      840    0.001    0.000    0.003    0.000 geometry.py:37(rotation)
+     1245    0.001    0.000    0.024    0.000 dataclasses.py:1763(replace)
+      990    0.001    0.000    0.047    0.000 sketch.py:1253(fill)
+      375    0.001    0.000    0.003    0.000 geometry.py:233(ellipse)
+
+
+
+--- sorted by cumulative (top 30) ---
+         275400 function calls in 0.143 seconds
+
+   Ordered by: cumulative time
+   List reduced from 127 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    0.158    0.011 02_rangoli.py:155(draw)
+       15    0.002    0.000    0.158    0.011 02_rangoli.py:132(draw_pattern)
+       60    0.004    0.000    0.109    0.002 02_rangoli.py:98(draw_petal_ring)
+      990    0.001    0.000    0.048    0.000 api.py:1507(fill)
+      990    0.001    0.000    0.047    0.000 sketch.py:1253(fill)
+      315    0.017    0.000    0.029    0.000 pathops.py:92(_combine)
+     5865    0.003    0.000    0.029    0.000 api.py:821(circle)
+     1245    0.001    0.000    0.026    0.000 state.py:96(update)
+     1005    0.001    0.000    0.026    0.000 sketch.py:1224(_paint)
+     1245    0.001    0.000    0.025    0.000 state.py:65(with_)
+     1005    0.001    0.000    0.025    0.000 paint.py:47(parse_paint)
+     1245    0.001    0.000    0.024    0.000 dataclasses.py:1763(replace)
+     1005    0.001    0.000    0.024    0.000 sketch.py:1227(<lambda>)
+     5865    0.007    0.000    0.023    0.000 sketch.py:1662(circle)
+     1005    0.002    0.000    0.023    0.000 sketch.py:1207(read_color)
+     1245    0.012    0.000    0.022    0.000 dataclasses.py:1782(_replace)
+     1005    0.005    0.000    0.019    0.000 color.py:365(parse_in_mode)
+       15    0.000    0.000    0.017    0.001 02_rangoli.py:62(rosette)
+      120    0.000    0.000    0.015    0.000 02_rangoli.py:53(lens)
+     9540    0.005    0.000    0.013    0.000 sketch.py:809(_emit)
+      120    0.000    0.000    0.012    0.000 paths.py:333(__and__)
+      120    0.000    0.000    0.012    0.000 paths.py:260(intersection)
+      120    0.000    0.000    0.012    0.000 pathops.py:100(intersection)
+     1005    0.002    0.000    0.012    0.000 color.py:193(from_hsb)
+      120    0.000    0.000    0.011    0.000 paths.py:330(__or__)
+      120    0.000    0.000    0.011    0.000 paths.py:241(union)
+      120    0.000    0.000    0.011    0.000 pathops.py:96(union)
+     9540    0.003    0.000    0.007    0.000 sketch.py:813(_append)
+       75    0.000    0.000    0.006    0.000 paths.py:336(__sub__)
+       75    0.000    0.000    0.006    0.000 paths.py:279(difference)
+
+

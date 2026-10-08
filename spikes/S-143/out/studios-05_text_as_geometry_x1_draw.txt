@@ -1,0 +1,81 @@
+studios-05_text_as_geometry x1: draw() profile, 5 frames
+
+--- sorted by tottime (top 30) ---
+         57726 function calls in 0.105 seconds
+
+   Ordered by: internal time
+   List reduced from 247 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       10    0.010    0.001    0.018    0.002 pathops.py:92(_combine)
+       15    0.009    0.001    0.009    0.001 {method 'ink_extents' of 'cairo.RecordingSurface' objects}
+       15    0.006    0.000    0.027    0.002 cairo2d.py:172(_draw_ops)
+        5    0.005    0.001    0.005    0.001 {built-in method builtins.compile}
+     1390    0.004    0.000    0.014    0.000 sketch.py:1662(circle)
+       10    0.004    0.000    0.006    0.001 pathops.py:61(from_skia)
+     1400    0.004    0.000    0.005    0.000 cairo2d.py:282(_composite_of)
+     1390    0.003    0.000    0.003    0.000 {method 'arc' of 'cairo.Context' objects}
+     1390    0.003    0.000    0.003    0.000 {method 'fill_preserve' of 'cairo.Context' objects}
+     1390    0.003    0.000    0.010    0.000 cairo2d.py:645(_paint)
+       15    0.003    0.000    0.005    0.000 marks.py:130(_local)
+     7430    0.003    0.000    0.003    0.000 {method 'append' of 'list' objects}
+     1400    0.002    0.000    0.004    0.000 cairo2d.py:604(_source)
+     6855    0.002    0.000    0.002    0.000 {built-in method builtins.getattr}
+        5    0.002    0.000    0.005    0.001 geometry.py:487(sample_path)
+     1405    0.002    0.000    0.005    0.000 sketch.py:809(_emit)
+     1390    0.002    0.000    0.018    0.000 api.py:821(circle)
+     1400    0.002    0.000    0.002    0.000 marks.py:161(_erases)
+        5    0.002    0.000    0.002    0.000 cairo2d.py:73(attach)
+       40    0.001    0.000    0.002    0.000 geometry.py:432(_flatten_cubic)
+     1405    0.001    0.000    0.003    0.000 sketch.py:813(_append)
+     1585    0.001    0.000    0.002    0.000 enum.py:677(__call__)
+     1390    0.001    0.000    0.002    0.000 sketch.py:1650(_ellipse_box)
+       10    0.001    0.000    0.002    0.000 cairo2d.py:621(_path)
+     2790    0.001    0.000    0.001    0.000 {method 'new_path' of 'cairo.Context' objects}
+       40    0.001    0.000    0.002    0.000 dataclasses.py:1782(_replace)
+       30    0.001    0.000    0.003    0.000 geometry.py:390(transformed)
+     1470    0.001    0.000    0.001    0.000 api.py:165(active_sketch)
+        5    0.001    0.000    0.009    0.002 sketch.py:1787(text_to_points)
+     1585    0.001    0.000    0.001    0.000 enum.py:1147(__new__)
+
+
+
+--- sorted by cumulative (top 30) ---
+         57726 function calls in 0.105 seconds
+
+   Ordered by: cumulative time
+   List reduced from 247 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        5    0.000    0.000    0.107    0.021 {built-in method builtins.exec}
+       15    0.001    0.000    0.040    0.003 marks.py:400(place)
+       15    0.000    0.000    0.038    0.003 marks.py:303(_measure)
+       15    0.000    0.000    0.037    0.002 cairo2d.py:127(ink_bounds)
+       15    0.000    0.000    0.027    0.002 cairo2d.py:109(draw)
+       15    0.006    0.000    0.027    0.002 cairo2d.py:172(_draw_ops)
+       10    0.010    0.001    0.018    0.002 pathops.py:92(_combine)
+     1390    0.002    0.000    0.018    0.000 api.py:821(circle)
+        1    0.000    0.000    0.016    0.016 05_text_as_geometry.py:1(<module>)
+        5    0.000    0.000    0.015    0.003 paths.py:336(__sub__)
+        5    0.000    0.000    0.015    0.003 paths.py:279(difference)
+        5    0.000    0.000    0.015    0.003 pathops.py:104(difference)
+     1390    0.004    0.000    0.014    0.000 sketch.py:1662(circle)
+     1390    0.003    0.000    0.010    0.000 cairo2d.py:645(_paint)
+       15    0.009    0.001    0.009    0.001 {method 'ink_extents' of 'cairo.RecordingSurface' objects}
+        5    0.000    0.000    0.009    0.002 api.py:1116(text_to_points)
+        5    0.001    0.000    0.009    0.002 sketch.py:1787(text_to_points)
+       10    0.004    0.000    0.006    0.001 pathops.py:61(from_skia)
+       10    0.000    0.000    0.006    0.001 sketch.py:1765(text_path)
+       15    0.000    0.000    0.006    0.000 marks.py:264(__exit__)
+       15    0.003    0.000    0.005    0.000 marks.py:130(_local)
+        5    0.002    0.000    0.005    0.001 geometry.py:487(sample_path)
+     1400    0.004    0.000    0.005    0.000 cairo2d.py:282(_composite_of)
+     1405    0.002    0.000    0.005    0.000 sketch.py:809(_emit)
+        5    0.005    0.001    0.005    0.001 {built-in method builtins.compile}
+       10    0.000    0.000    0.004    0.000 typography.py:219(outline_ops)
+     1400    0.002    0.000    0.004    0.000 cairo2d.py:604(_source)
+       15    0.000    0.000    0.003    0.000 api.py:3696(mark)
+       10    0.000    0.000    0.003    0.000 marks.py:567(mark_from_path)
+        5    0.000    0.000    0.003    0.001 api.py:1096(text_path)
+
+

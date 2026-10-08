@@ -1,0 +1,53 @@
+{
+ "id": "studios-05_text_as_geometry",
+ "scale": 1,
+ "mode": "script",
+ "frames_timed": 5,
+ "canvas": [
+  420,
+  595
+ ],
+ "ms": {
+  "draw": 14.033,
+  "cairo": 0.0,
+  "render": 4.868,
+  "enc_obj": 8.899,
+  "enc_dump": 2.865,
+  "encode": 11.764,
+  "present_other": 4.868
+ },
+ "ops": 290.0,
+ "json_bytes": 68484,
+ "profile": {
+  "frames_profiled": 5,
+  "draw_bucket_ms_per_frame": {
+   "cairo2d.py": 7.726,
+   "funground other (pathops.py)": 3.284,
+   "sketch.py": 2.587,
+   "state/colour/geometry": 2.078,
+   "funground other (marks.py)": 1.462,
+   "api.py": 0.762,
+   "stdlib/3rd-party (random, math, ...)": 0.612,
+   "dataclasses.replace (state copy)": 0.376,
+   "typography": 0.321,
+   "ir.py": 0.308,
+   "funground other (surface.py)": 0.223,
+   "funground other (paths.py)": 0.08,
+   "user": 0.063,
+   "dataclass-generated (<string>)": 0.017,
+   "funground other (pages.py)": 0.011,
+   "funground other (exploring.py)": 0.002
+  },
+  "draw_profiled_total_ms_per_frame": 20.913,
+  "api_py_calls_per_frame": 885.0,
+  "function_calls_per_frame_draw": 11545.2,
+  "render_bucket_ms_per_frame": {
+   "cairo2d.py": 7.863,
+   "sketch.py": 0.017,
+   "ir.py": 0.011,
+   "state/colour/geometry": 0.004
+  },
+  "render_profiled_total_ms_per_frame": 7.966,
+  "function_calls_per_frame_render": 3974.0
+ }
+}

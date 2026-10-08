@@ -1,0 +1,81 @@
+projects-06_kinetic_type x2: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         3763095 function calls in 1.917 seconds
+
+   Ordered by: internal time
+   List reduced from 103 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    18930    0.212    0.000    0.272    0.000 noise.py:60(__call__)
+   862080    0.197    0.000    0.483    0.000 {built-in method builtins.isinstance}
+     9540    0.118    0.000    0.226    0.000 dataclasses.py:1782(_replace)
+   208230    0.114    0.000    0.230    0.000 {built-in method _abc._abc_instancecheck}
+   179835    0.108    0.000    0.477    0.000 vector.py:25(_number)
+    28425    0.098    0.000    0.301    0.000 color.py:260(parse)
+   189300    0.065    0.000    0.065    0.000 {built-in method _abc._abc_subclasscheck}
+   390390    0.058    0.000    0.058    0.000 {built-in method builtins.getattr}
+   208230    0.056    0.000    0.286    0.000 <frozen abc>:117(__instancecheck__)
+    28425    0.051    0.000    0.080    0.000 color.py:41(__post_init__)
+   189300    0.050    0.000    0.116    0.000 <frozen abc>:121(__subclasscheck__)
+    75720    0.048    0.000    0.457    0.000 vector.py:59(__init__)
+     9465    0.043    0.000    0.878    0.000 06_kinetic_type.py:84(pull)
+   227160    0.042    0.000    0.042    0.000 {built-in method math.cos}
+    66255    0.042    0.000    0.439    0.000 vector.py:103(copy)
+    56880    0.038    0.000    0.060    0.000 color.py:328(_component)
+    28425    0.037    0.000    0.118    0.000 <string>:2(__init__)
+     9465    0.035    0.000    0.107    0.000 color.py:240(lerp)
+    28395    0.033    0.000    0.355    0.000 vector.py:478(__mul__)
+     9465    0.027    0.000    0.436    0.000 api.py:1484(lerp_color)
+       15    0.025    0.002    0.895    0.060 06_kinetic_type.py:103(paint)
+    75840    0.025    0.000    0.085    0.000 color.py:298(<genexpr>)
+    28395    0.019    0.000    0.236    0.000 vector.py:472(__add__)
+    47325    0.018    0.000    0.025    0.000 color.py:258(<genexpr>)
+     9465    0.018    0.000    0.059    0.000 sketch.py:1662(circle)
+       15    0.016    0.001    1.095    0.073 06_kinetic_type.py:92(step)
+    37860    0.015    0.000    0.020    0.000 vector.py:14(_pair)
+    28395    0.015    0.000    0.030    0.000 vector.py:143(add)
+    18930    0.015    0.000    0.304    0.000 api.py:3434(noise)
+    18930    0.014    0.000    0.287    0.000 sketch.py:1972(noise)
+
+
+
+--- sorted by cumulative (top 30) ---
+         3763095 function calls in 1.917 seconds
+
+   Ordered by: cumulative time
+   List reduced from 103 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    1.990    0.133 06_kinetic_type.py:158(draw)
+       15    0.016    0.001    1.095    0.073 06_kinetic_type.py:92(step)
+       15    0.025    0.002    0.895    0.060 06_kinetic_type.py:103(paint)
+     9465    0.043    0.000    0.878    0.000 06_kinetic_type.py:84(pull)
+   862080    0.197    0.000    0.483    0.000 {built-in method builtins.isinstance}
+   179835    0.108    0.000    0.477    0.000 vector.py:25(_number)
+    75720    0.048    0.000    0.457    0.000 vector.py:59(__init__)
+    66255    0.042    0.000    0.439    0.000 vector.py:103(copy)
+     9465    0.027    0.000    0.436    0.000 api.py:1484(lerp_color)
+    28395    0.033    0.000    0.355    0.000 vector.py:478(__mul__)
+     9480    0.011    0.000    0.334    0.000 api.py:1507(fill)
+     9480    0.014    0.000    0.317    0.000 sketch.py:1253(fill)
+    18930    0.015    0.000    0.304    0.000 api.py:3434(noise)
+    28425    0.098    0.000    0.301    0.000 color.py:260(parse)
+    18930    0.014    0.000    0.287    0.000 sketch.py:1972(noise)
+   208230    0.056    0.000    0.286    0.000 <frozen abc>:117(__instancecheck__)
+    18930    0.212    0.000    0.272    0.000 noise.py:60(__call__)
+     9540    0.010    0.000    0.261    0.000 state.py:96(update)
+     9540    0.008    0.000    0.252    0.000 state.py:65(with_)
+     9540    0.011    0.000    0.244    0.000 dataclasses.py:1763(replace)
+    28395    0.019    0.000    0.236    0.000 vector.py:472(__add__)
+   208230    0.114    0.000    0.230    0.000 {built-in method _abc._abc_instancecheck}
+     9540    0.118    0.000    0.226    0.000 dataclasses.py:1782(_replace)
+    28425    0.037    0.000    0.118    0.000 <string>:2(__init__)
+   189300    0.050    0.000    0.116    0.000 <frozen abc>:121(__subclasscheck__)
+     9465    0.035    0.000    0.107    0.000 color.py:240(lerp)
+    75840    0.025    0.000    0.085    0.000 color.py:298(<genexpr>)
+    28395    0.014    0.000    0.082    0.000 vector.py:189(mult)
+     9465    0.007    0.000    0.080    0.000 vector.py:475(__sub__)
+    28425    0.051    0.000    0.080    0.000 color.py:41(__post_init__)
+
+

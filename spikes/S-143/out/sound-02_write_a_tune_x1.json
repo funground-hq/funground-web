@@ -1,0 +1,54 @@
+{
+ "id": "sound-02_write_a_tune",
+ "scale": 1,
+ "mode": "loop",
+ "frames_timed": 12,
+ "canvas": [
+  640,
+  400
+ ],
+ "ms": {
+  "draw": 86.913,
+  "cairo": 5.678,
+  "render": 5.722,
+  "enc_obj": 7.362,
+  "enc_dump": 2.064,
+  "encode": 9.426,
+  "present_other": 0.044
+ },
+ "ops": 413.0,
+ "json_bytes": 75388,
+ "profile": {
+  "frames_profiled": 15,
+  "draw_bucket_ms_per_frame": {
+   "funground other (synth.py)": 81.241,
+   "sketch.py": 1.489,
+   "funground other (sound.py)": 1.225,
+   "user": 1.08,
+   "api.py": 0.69,
+   "state/colour/geometry": 0.538,
+   "dataclasses.replace (state copy)": 0.512,
+   "ir.py": 0.279,
+   "stdlib/3rd-party (random, math, ...)": 0.04,
+   "dataclass-generated (<string>)": 0.03,
+   "typography": 0.008,
+   "funground other (exploring.py)": 0.001,
+   "funground other (marks.py)": 0.0
+  },
+  "draw_profiled_total_ms_per_frame": 87.206,
+  "api_py_calls_per_frame": 1313.0,
+  "function_calls_per_frame_draw": 13060.3,
+  "render_bucket_ms_per_frame": {
+   "cairo2d.py": 8.094,
+   "state/colour/geometry": 1.227,
+   "typography": 0.129,
+   "stdlib/3rd-party (random, math, ...)": 0.087,
+   "sketch.py": 0.04,
+   "ir.py": 0.005,
+   "dataclass-generated (<string>)": 0.005,
+   "funground other (headless.py)": 0.002
+  },
+  "render_profiled_total_ms_per_frame": 9.651,
+  "function_calls_per_frame_render": 9349.1
+ }
+}

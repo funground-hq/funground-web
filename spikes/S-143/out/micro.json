@@ -1,0 +1,30 @@
+{
+ "fill('tomato')": {
+  "before_us": 11.07,
+  "after_us": 9.91
+ },
+ "fill('#336699')": {
+  "before_us": 14.93,
+  "after_us": 11.77
+ },
+ "fill(200,100,50)  [tuple, no cache]": {
+  "before_us": 18.67,
+  "after_us": 10.24
+ },
+ "stroke_width(2)  [state update only]": {
+  "before_us": 20.54,
+  "after_us": 7.18
+ },
+ "fill('tomato') with P1+P2": {
+  "before_us": 13.75,
+  "after_us": 6.57
+ },
+ "Vector(1.5, 2.5)": {
+  "before_us": 2.12,
+  "after_us": 0.31
+ },
+ "circle()  [control: no patch applies]": {
+  "before_us": 1.49,
+  "after_us": 1.68
+ }
+}

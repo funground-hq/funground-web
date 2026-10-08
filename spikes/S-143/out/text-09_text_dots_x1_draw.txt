@@ -1,0 +1,81 @@
+text-09_text_dots x1: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         987480 function calls in 0.536 seconds
+
+   Ordered by: internal time
+   List reduced from 131 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     7695    0.091    0.000    0.176    0.000 dataclasses.py:1782(_replace)
+    15165    0.041    0.000    0.124    0.000 color.py:260(parse)
+   253560    0.037    0.000    0.037    0.000 {built-in method builtins.getattr}
+   197595    0.028    0.000    0.028    0.000 {built-in method builtins.isinstance}
+     1980    0.025    0.000    0.032    0.000 geometry.py:432(_flatten_cubic)
+    15165    0.024    0.000    0.178    0.000 sketch.py:1207(read_color)
+     7560    0.020    0.000    0.191    0.000 api.py:1266(color)
+    22755    0.016    0.000    0.024    0.000 color.py:328(_component)
+       30    0.015    0.000    0.056    0.002 geometry.py:487(sample_path)
+     7605    0.014    0.000    0.022    0.000 color.py:41(__post_init__)
+     7560    0.014    0.000    0.045    0.000 sketch.py:1662(circle)
+    15165    0.013    0.000    0.140    0.000 color.py:365(parse_in_mode)
+       15    0.012    0.001    0.606    0.040 09_text_dots.py:29(draw)
+    30300    0.011    0.000    0.035    0.000 color.py:298(<genexpr>)
+     7590    0.010    0.000    0.242    0.000 sketch.py:1253(fill)
+     7695    0.009    0.000    0.190    0.000 dataclasses.py:1763(replace)
+    30300    0.009    0.000    0.012    0.000 sketch.py:1213(<genexpr>)
+     7590    0.008    0.000    0.255    0.000 api.py:1507(fill)
+    41190    0.008    0.000    0.008    0.000 {method 'append' of 'list' objects}
+     7695    0.007    0.000    0.203    0.000 state.py:96(update)
+    15300    0.006    0.000    0.008    0.000 api.py:165(active_sketch)
+     7605    0.006    0.000    0.017    0.000 sketch.py:809(_emit)
+     7695    0.006    0.000    0.196    0.000 state.py:65(with_)
+     7560    0.006    0.000    0.056    0.000 api.py:821(circle)
+    38850    0.006    0.000    0.006    0.000 {built-in method builtins.len}
+     7605    0.005    0.000    0.028    0.000 paint.py:47(parse_paint)
+     7605    0.005    0.000    0.033    0.000 sketch.py:1224(_paint)
+    15150    0.005    0.000    0.007    0.000 color.py:287(<genexpr>)
+     7605    0.005    0.000    0.022    0.000 sketch.py:1227(<lambda>)
+      150    0.005    0.000    0.012    0.000 geometry.py:390(transformed)
+
+
+
+--- sorted by cumulative (top 30) ---
+         987480 function calls in 0.536 seconds
+
+   Ordered by: cumulative time
+   List reduced from 131 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.012    0.001    0.606    0.040 09_text_dots.py:29(draw)
+     7590    0.008    0.000    0.255    0.000 api.py:1507(fill)
+     7590    0.010    0.000    0.242    0.000 sketch.py:1253(fill)
+     7695    0.007    0.000    0.203    0.000 state.py:96(update)
+     7695    0.006    0.000    0.196    0.000 state.py:65(with_)
+     7560    0.020    0.000    0.191    0.000 api.py:1266(color)
+     7695    0.009    0.000    0.190    0.000 dataclasses.py:1763(replace)
+    15165    0.024    0.000    0.178    0.000 sketch.py:1207(read_color)
+     7695    0.091    0.000    0.176    0.000 dataclasses.py:1782(_replace)
+    15165    0.013    0.000    0.140    0.000 color.py:365(parse_in_mode)
+    15165    0.041    0.000    0.124    0.000 color.py:260(parse)
+       30    0.000    0.000    0.081    0.003 api.py:1116(text_to_points)
+       30    0.003    0.000    0.080    0.003 sketch.py:1787(text_to_points)
+       30    0.015    0.000    0.056    0.002 geometry.py:487(sample_path)
+     7560    0.006    0.000    0.056    0.000 api.py:821(circle)
+     7560    0.014    0.000    0.045    0.000 sketch.py:1662(circle)
+   253560    0.037    0.000    0.037    0.000 {built-in method builtins.getattr}
+       30    0.002    0.000    0.036    0.001 geometry.py:451(contours)
+    30300    0.011    0.000    0.035    0.000 color.py:298(<genexpr>)
+     7605    0.005    0.000    0.033    0.000 sketch.py:1224(_paint)
+     1980    0.025    0.000    0.032    0.000 geometry.py:432(_flatten_cubic)
+     7605    0.005    0.000    0.028    0.000 paint.py:47(parse_paint)
+   197595    0.028    0.000    0.028    0.000 {built-in method builtins.isinstance}
+    22755    0.016    0.000    0.024    0.000 color.py:328(_component)
+     7605    0.014    0.000    0.022    0.000 color.py:41(__post_init__)
+     7605    0.005    0.000    0.022    0.000 sketch.py:1227(<lambda>)
+       30    0.001    0.000    0.021    0.001 sketch.py:1765(text_path)
+     7605    0.006    0.000    0.017    0.000 sketch.py:809(_emit)
+       30    0.001    0.000    0.015    0.000 typography.py:219(outline_ops)
+      150    0.005    0.000    0.012    0.000 geometry.py:390(transformed)
+
+

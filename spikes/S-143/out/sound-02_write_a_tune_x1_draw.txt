@@ -1,0 +1,81 @@
+sound-02_write_a_tune x1: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         195905 function calls in 1.308 seconds
+
+   Ordered by: internal time
+   List reduced from 110 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    12975    1.060    0.000    1.060    0.000 {built-in method builtins.sum}
+       15    0.148    0.010    1.217    0.081 synth.py:654(find_pitch)
+       15    0.012    0.001    1.320    0.088 02_write_a_tune.py:64(draw)
+    30736    0.010    0.000    0.010    0.000 sound.py:848(<genexpr>)
+     6000    0.008    0.000    0.032    0.000 sketch.py:1688(line)
+    36930    0.006    0.000    0.006    0.000 {method 'append' of 'list' objects}
+       16    0.006    0.000    0.015    0.001 {method 'extend' of 'list' objects}
+      300    0.005    0.000    0.010    0.000 dataclasses.py:1782(_replace)
+     6195    0.005    0.000    0.014    0.000 sketch.py:809(_emit)
+     6000    0.005    0.000    0.040    0.000 api.py:935(line)
+    12975    0.004    0.000    0.004    0.000 {built-in method math.sqrt}
+     6195    0.003    0.000    0.008    0.000 sketch.py:813(_append)
+     6495    0.003    0.000    0.004    0.000 api.py:165(active_sketch)
+     6195    0.003    0.000    0.004    0.000 ir.py:252(append)
+       15    0.002    0.000    1.235    0.082 sound.py:301(_compute_pitch)
+      330    0.002    0.000    0.004    0.000 geometry.py:409(rect_radii)
+     9600    0.002    0.000    0.002    0.000 {built-in method builtins.getattr}
+     7695    0.002    0.000    0.002    0.000 {built-in method builtins.min}
+     6047    0.001    0.000    0.001    0.000 {built-in method builtins.max}
+     6916    0.001    0.000    0.001    0.000 {built-in method builtins.len}
+     6345    0.001    0.000    0.001    0.000 sketch.py:192(style)
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+     6195    0.001    0.000    0.001    0.000 sketch.py:805(_require_window)
+     6510    0.001    0.000    0.001    0.000 api.py:150(canvas_sketch)
+      225    0.001    0.000    0.003    0.000 color.py:309(_parse_str)
+     1650    0.001    0.000    0.001    0.000 geometry.py:425(<genexpr>)
+      165    0.001    0.000    0.006    0.000 sketch.py:1670(_emit_rect)
+      225    0.001    0.000    0.001    0.000 color.py:41(__post_init__)
+      165    0.001    0.000    0.002    0.000 api.py:2821(note_to_frequency)
+      300    0.001    0.000    0.011    0.000 state.py:96(update)
+
+
+
+--- sorted by cumulative (top 30) ---
+         195905 function calls in 1.308 seconds
+
+   Ordered by: cumulative time
+   List reduced from 110 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.012    0.001    1.320    0.088 02_write_a_tune.py:64(draw)
+       15    0.000    0.000    1.236    0.082 sound.py:278(pitch)
+       15    0.000    0.000    1.236    0.082 sound.py:174(_cached)
+       15    0.002    0.000    1.235    0.082 sound.py:301(_compute_pitch)
+       15    0.148    0.010    1.217    0.081 synth.py:654(find_pitch)
+    12975    1.060    0.000    1.060    0.000 {built-in method builtins.sum}
+     6000    0.005    0.000    0.040    0.000 api.py:935(line)
+     6000    0.008    0.000    0.032    0.000 sketch.py:1688(line)
+       15    0.000    0.000    0.016    0.001 sound.py:821(_window)
+       16    0.006    0.000    0.015    0.001 {method 'extend' of 'list' objects}
+     6195    0.005    0.000    0.014    0.000 sketch.py:809(_emit)
+      300    0.001    0.000    0.011    0.000 state.py:96(update)
+      300    0.000    0.000    0.011    0.000 state.py:65(with_)
+      180    0.000    0.000    0.011    0.000 api.py:1507(fill)
+      300    0.001    0.000    0.010    0.000 dataclasses.py:1763(replace)
+      180    0.000    0.000    0.010    0.000 sketch.py:1253(fill)
+    30736    0.010    0.000    0.010    0.000 sound.py:848(<genexpr>)
+      300    0.005    0.000    0.010    0.000 dataclasses.py:1782(_replace)
+     6195    0.003    0.000    0.008    0.000 sketch.py:813(_append)
+      165    0.000    0.000    0.007    0.000 api.py:856(rect)
+    36930    0.006    0.000    0.006    0.000 {method 'append' of 'list' objects}
+      165    0.000    0.000    0.006    0.000 sketch.py:1683(rect)
+      165    0.001    0.000    0.006    0.000 sketch.py:1670(_emit_rect)
+      225    0.000    0.000    0.005    0.000 sketch.py:1224(_paint)
+      225    0.000    0.000    0.004    0.000 paint.py:47(parse_paint)
+     6195    0.003    0.000    0.004    0.000 ir.py:252(append)
+      225    0.000    0.000    0.004    0.000 sketch.py:1227(<lambda>)
+     6495    0.003    0.000    0.004    0.000 api.py:165(active_sketch)
+      330    0.002    0.000    0.004    0.000 geometry.py:409(rect_radii)
+      225    0.000    0.000    0.004    0.000 sketch.py:1207(read_color)
+
+

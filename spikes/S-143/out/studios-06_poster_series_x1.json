@@ -1,0 +1,56 @@
+{
+ "id": "studios-06_poster_series",
+ "scale": 1,
+ "mode": "loop",
+ "frames_timed": 12,
+ "canvas": [
+  595,
+  842
+ ],
+ "ms": {
+  "draw": 6.066,
+  "cairo": 22.78,
+  "render": 22.815,
+  "enc_obj": 2.186,
+  "enc_dump": 0.692,
+  "encode": 2.878,
+  "present_other": 0.035
+ },
+ "ops": 229.0,
+ "json_bytes": 22414,
+ "profile": {
+  "frames_profiled": 15,
+  "draw_bucket_ms_per_frame": {
+   "funground other (surface.py)": 2.561,
+   "state/colour/geometry": 2.19,
+   "dataclasses.replace (state copy)": 2.184,
+   "funground other (marks.py)": 2.156,
+   "sketch.py": 1.324,
+   "cairo2d.py": 0.715,
+   "stdlib/3rd-party (random, math, ...)": 0.683,
+   "api.py": 0.591,
+   "funground other (exploring.py)": 0.491,
+   "user": 0.398,
+   "ir.py": 0.148,
+   "dataclass-generated (<string>)": 0.11,
+   "funground other (paths.py)": 0.081,
+   "typography": 0.057,
+   "funground other (__init__.py)": 0.016
+  },
+  "draw_profiled_total_ms_per_frame": 13.785,
+  "api_py_calls_per_frame": 595.0,
+  "function_calls_per_frame_draw": 11713.0,
+  "render_bucket_ms_per_frame": {
+   "state/colour/geometry": 21.767,
+   "cairo2d.py": 14.708,
+   "typography": 1.828,
+   "dataclass-generated (<string>)": 0.082,
+   "sketch.py": 0.053,
+   "stdlib/3rd-party (random, math, ...)": 0.035,
+   "ir.py": 0.006,
+   "funground other (headless.py)": 0.002
+  },
+  "render_profiled_total_ms_per_frame": 38.557,
+  "function_calls_per_frame_render": 32202.3
+ }
+}

@@ -1,0 +1,54 @@
+{
+ "id": "studios-03_rhythm",
+ "scale": 1,
+ "mode": "script",
+ "frames_timed": 5,
+ "canvas": [
+  842,
+  595
+ ],
+ "ms": {
+  "draw": 5.602,
+  "cairo": 0.0,
+  "render": 6.581,
+  "enc_obj": 3.726,
+  "enc_dump": 0.862,
+  "encode": 4.588,
+  "present_other": 6.581
+ },
+ "ops": 371.0,
+ "json_bytes": 32492,
+ "profile": {
+  "frames_profiled": 5,
+  "draw_bucket_ms_per_frame": {
+   "funground other (marks.py)": 2.36,
+   "state/colour/geometry": 1.649,
+   "dataclasses.replace (state copy)": 0.888,
+   "sketch.py": 0.487,
+   "funground other (surface.py)": 0.423,
+   "api.py": 0.254,
+   "cairo2d.py": 0.215,
+   "stdlib/3rd-party (random, math, ...)": 0.184,
+   "ir.py": 0.117,
+   "user": 0.076,
+   "dataclass-generated (<string>)": 0.068,
+   "typography": 0.025,
+   "funground other (pages.py)": 0.02,
+   "funground other (exploring.py)": 0.002
+  },
+  "draw_profiled_total_ms_per_frame": 8.249,
+  "api_py_calls_per_frame": 267.0,
+  "function_calls_per_frame_draw": 5556.2,
+  "render_bucket_ms_per_frame": {
+   "cairo2d.py": 5.616,
+   "state/colour/geometry": 3.331,
+   "typography": 0.634,
+   "dataclass-generated (<string>)": 0.026,
+   "sketch.py": 0.018,
+   "ir.py": 0.014,
+   "stdlib/3rd-party (random, math, ...)": 0.01
+  },
+  "render_profiled_total_ms_per_frame": 9.698,
+  "function_calls_per_frame_render": 7512.0
+ }
+}

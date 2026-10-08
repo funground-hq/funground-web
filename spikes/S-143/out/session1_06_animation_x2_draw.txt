@@ -1,0 +1,81 @@
+session1/06_animation x2: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         1800 function calls in 0.005 seconds
+
+   Ordered by: internal time
+   List reduced from 43 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       15    0.001    0.000    0.001    0.000 dataclasses.py:1782(_replace)
+       15    0.000    0.000    0.004    0.000 06_animation.py:10(draw)
+      570    0.000    0.000    0.000    0.000 {built-in method builtins.getattr}
+       15    0.000    0.000    0.001    0.000 api.py:796(background)
+       30    0.000    0.000    0.001    0.000 color.py:309(_parse_str)
+       15    0.000    0.000    0.001    0.000 sketch.py:1609(background)
+       15    0.000    0.000    0.000    0.000 sketch.py:1662(circle)
+       30    0.000    0.000    0.000    0.000 color.py:41(__post_init__)
+       30    0.000    0.000    0.000    0.000 <string>:2(__init__)
+       30    0.000    0.000    0.001    0.000 color.py:365(parse_in_mode)
+       15    0.000    0.000    0.001    0.000 dataclasses.py:1763(replace)
+       30    0.000    0.000    0.000    0.000 sketch.py:809(_emit)
+       30    0.000    0.000    0.001    0.000 sketch.py:1224(_paint)
+       30    0.000    0.000    0.001    0.000 color.py:260(parse)
+       15    0.000    0.000    0.002    0.000 sketch.py:1253(fill)
+       30    0.000    0.000    0.001    0.000 sketch.py:1207(read_color)
+       15    0.000    0.000    0.001    0.000 state.py:96(update)
+       30    0.000    0.000    0.001    0.000 sketch.py:1227(<lambda>)
+       30    0.000    0.000    0.001    0.000 paint.py:47(parse_paint)
+       15    0.000    0.000    0.002    0.000 api.py:1507(fill)
+      240    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
+       30    0.000    0.000    0.000    0.000 sketch.py:813(_append)
+       45    0.000    0.000    0.000    0.000 api.py:165(active_sketch)
+       15    0.000    0.000    0.000    0.000 __init__.py:422(__getattr__)
+       15    0.000    0.000    0.001    0.000 state.py:65(with_)
+       15    0.000    0.000    0.000    0.000 api.py:821(circle)
+       15    0.000    0.000    0.000    0.000 sketch.py:1650(_ellipse_box)
+       30    0.000    0.000    0.000    0.000 ir.py:252(append)
+       15    0.000    0.000    0.000    0.000 dataclasses.py:1472(_is_dataclass_instance)
+
+
+
+--- sorted by cumulative (top 30) ---
+         1800 function calls in 0.005 seconds
+
+   Ordered by: cumulative time
+   List reduced from 43 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    0.004    0.000 06_animation.py:10(draw)
+       15    0.000    0.000    0.002    0.000 api.py:1507(fill)
+       15    0.000    0.000    0.002    0.000 sketch.py:1253(fill)
+       15    0.000    0.000    0.001    0.000 api.py:796(background)
+       15    0.000    0.000    0.001    0.000 state.py:96(update)
+       15    0.000    0.000    0.001    0.000 state.py:65(with_)
+       15    0.000    0.000    0.001    0.000 dataclasses.py:1763(replace)
+       15    0.000    0.000    0.001    0.000 sketch.py:1609(background)
+       30    0.000    0.000    0.001    0.000 sketch.py:1224(_paint)
+       15    0.001    0.000    0.001    0.000 dataclasses.py:1782(_replace)
+       30    0.000    0.000    0.001    0.000 paint.py:47(parse_paint)
+       30    0.000    0.000    0.001    0.000 sketch.py:1227(<lambda>)
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       30    0.000    0.000    0.001    0.000 sketch.py:1207(read_color)
+       30    0.000    0.000    0.001    0.000 color.py:365(parse_in_mode)
+       30    0.000    0.000    0.001    0.000 color.py:260(parse)
+       30    0.000    0.000    0.001    0.000 color.py:309(_parse_str)
+       15    0.000    0.000    0.000    0.000 api.py:821(circle)
+       15    0.000    0.000    0.000    0.000 sketch.py:1662(circle)
+       30    0.000    0.000    0.000    0.000 <string>:2(__init__)
+      570    0.000    0.000    0.000    0.000 {built-in method builtins.getattr}
+       30    0.000    0.000    0.000    0.000 sketch.py:809(_emit)
+       30    0.000    0.000    0.000    0.000 color.py:41(__post_init__)
+       30    0.000    0.000    0.000    0.000 sketch.py:813(_append)
+       15    0.000    0.000    0.000    0.000 __init__.py:422(__getattr__)
+       45    0.000    0.000    0.000    0.000 api.py:165(active_sketch)
+      240    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
+       15    0.000    0.000    0.000    0.000 sketch.py:1650(_ellipse_box)
+       15    0.000    0.000    0.000    0.000 dataclasses.py:1472(_is_dataclass_instance)
+       30    0.000    0.000    0.000    0.000 ir.py:252(append)
+
+

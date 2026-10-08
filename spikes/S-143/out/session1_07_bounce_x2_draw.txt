@@ -1,0 +1,81 @@
+session1/07_bounce x2: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         900 function calls in 0.003 seconds
+
+   Ordered by: internal time
+   List reduced from 34 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       15    0.000    0.000    0.002    0.000 07_bounce.py:11(draw)
+       15    0.000    0.000    0.001    0.000 api.py:796(background)
+       15    0.000    0.000    0.000    0.000 sketch.py:1662(circle)
+       15    0.000    0.000    0.001    0.000 sketch.py:1609(background)
+       15    0.000    0.000    0.000    0.000 color.py:309(_parse_str)
+       15    0.000    0.000    0.000    0.000 color.py:41(__post_init__)
+       15    0.000    0.000    0.000    0.000 color.py:365(parse_in_mode)
+       30    0.000    0.000    0.000    0.000 sketch.py:809(_emit)
+       15    0.000    0.000    0.000    0.000 <string>:2(__init__)
+       15    0.000    0.000    0.000    0.000 color.py:260(parse)
+       15    0.000    0.000    0.000    0.000 sketch.py:1207(read_color)
+       30    0.000    0.000    0.000    0.000 api.py:196(live_value)
+       30    0.000    0.000    0.000    0.000 __init__.py:422(__getattr__)
+       30    0.000    0.000    0.000    0.000 sketch.py:813(_append)
+       15    0.000    0.000    0.001    0.000 sketch.py:1227(<lambda>)
+       15    0.000    0.000    0.001    0.000 sketch.py:1224(_paint)
+       15    0.000    0.000    0.000    0.000 api.py:821(circle)
+       15    0.000    0.000    0.000    0.000 sketch.py:1650(_ellipse_box)
+       30    0.000    0.000    0.000    0.000 api.py:165(active_sketch)
+       15    0.000    0.000    0.001    0.000 paint.py:47(parse_paint)
+      120    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
+       90    0.000    0.000    0.000    0.000 {built-in method builtins.getattr}
+       30    0.000    0.000    0.000    0.000 ir.py:252(append)
+       45    0.000    0.000    0.000    0.000 {method 'append' of 'list' objects}
+       60    0.000    0.000    0.000    0.000 api.py:150(canvas_sketch)
+       15    0.000    0.000    0.000    0.000 exploring.py:151(in_cell)
+       30    0.000    0.000    0.000    0.000 sketch.py:192(style)
+       30    0.000    0.000    0.000    0.000 sketch.py:805(_require_window)
+       30    0.000    0.000    0.000    0.000 {built-in method time.perf_counter}
+
+
+
+--- sorted by cumulative (top 30) ---
+         900 function calls in 0.003 seconds
+
+   Ordered by: cumulative time
+   List reduced from 34 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    0.002    0.000 07_bounce.py:11(draw)
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       15    0.000    0.000    0.001    0.000 api.py:796(background)
+       15    0.000    0.000    0.001    0.000 sketch.py:1609(background)
+       15    0.000    0.000    0.001    0.000 sketch.py:1224(_paint)
+       15    0.000    0.000    0.001    0.000 paint.py:47(parse_paint)
+       15    0.000    0.000    0.001    0.000 sketch.py:1227(<lambda>)
+       15    0.000    0.000    0.000    0.000 sketch.py:1207(read_color)
+       15    0.000    0.000    0.000    0.000 color.py:365(parse_in_mode)
+       15    0.000    0.000    0.000    0.000 color.py:260(parse)
+       15    0.000    0.000    0.000    0.000 api.py:821(circle)
+       15    0.000    0.000    0.000    0.000 color.py:309(_parse_str)
+       15    0.000    0.000    0.000    0.000 sketch.py:1662(circle)
+       30    0.000    0.000    0.000    0.000 sketch.py:809(_emit)
+       15    0.000    0.000    0.000    0.000 <string>:2(__init__)
+       30    0.000    0.000    0.000    0.000 __init__.py:422(__getattr__)
+       15    0.000    0.000    0.000    0.000 color.py:41(__post_init__)
+       30    0.000    0.000    0.000    0.000 sketch.py:813(_append)
+       30    0.000    0.000    0.000    0.000 api.py:196(live_value)
+       30    0.000    0.000    0.000    0.000 api.py:165(active_sketch)
+       15    0.000    0.000    0.000    0.000 sketch.py:1650(_ellipse_box)
+       30    0.000    0.000    0.000    0.000 ir.py:252(append)
+      120    0.000    0.000    0.000    0.000 {built-in method builtins.isinstance}
+       90    0.000    0.000    0.000    0.000 {built-in method builtins.getattr}
+       45    0.000    0.000    0.000    0.000 {method 'append' of 'list' objects}
+       60    0.000    0.000    0.000    0.000 api.py:150(canvas_sketch)
+       15    0.000    0.000    0.000    0.000 exploring.py:151(in_cell)
+       30    0.000    0.000    0.000    0.000 sketch.py:192(style)
+       30    0.000    0.000    0.000    0.000 sketch.py:805(_require_window)
+       30    0.000    0.000    0.000    0.000 {built-in method time.perf_counter}
+
+

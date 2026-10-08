@@ -1,0 +1,81 @@
+randomness-03_noise x2: _render() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         84690 function calls in 0.093 seconds
+
+   Ordered by: internal time
+   List reduced from 61 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.013    0.001    0.090    0.006 cairo2d.py:172(_draw_ops)
+       15    0.011    0.001    0.011    0.001 {method 'paint' of 'cairo.Context' objects}
+     6270    0.010    0.000    0.014    0.000 cairo2d.py:282(_composite_of)
+     6240    0.008    0.000    0.008    0.000 {method 'fill_preserve' of 'cairo.Context' objects}
+     6240    0.007    0.000    0.028    0.000 cairo2d.py:645(_paint)
+       15    0.007    0.000    0.007    0.000 {method 'stroke' of 'cairo.Context' objects}
+     6285    0.006    0.000    0.011    0.000 cairo2d.py:604(_source)
+     6240    0.005    0.000    0.011    0.000 cairo2d.py:631(_rect_path)
+       15    0.005    0.000    0.005    0.000 {method 'fill' of 'cairo.Context' objects}
+     6240    0.005    0.000    0.005    0.000 {method 'rectangle' of 'cairo.Context' objects}
+    18750    0.004    0.000    0.004    0.000 {built-in method builtins.getattr}
+     6285    0.003    0.000    0.003    0.000 {method 'set_source_rgba' of 'cairo.Context' objects}
+    12510    0.003    0.000    0.003    0.000 {method 'new_path' of 'cairo.Context' objects}
+     6285    0.001    0.000    0.001    0.000 {built-in method builtins.isinstance}
+       30    0.001    0.000    0.002    0.000 cairo2d.py:621(_path)
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+     2430    0.001    0.000    0.001    0.000 {method 'line_to' of 'cairo.Context' objects}
+       15    0.000    0.000    0.092    0.006 sketch.py:819(_render)
+       15    0.000    0.000    0.000    0.000 sketch.py:716(_view)
+       15    0.000    0.000    0.001    0.000 sketch.py:736(_view_pixels)
+       15    0.000    0.000    0.000    0.000 {method 'get_data' of 'cairo.ImageSurface' objects}
+       15    0.000    0.000    0.000    0.000 cairo2d.py:97(pixels)
+       15    0.000    0.000    0.090    0.006 cairo2d.py:109(draw)
+       15    0.000    0.000    0.000    0.000 <string>:2(__init__)
+       30    0.000    0.000    0.000    0.000 {method 'restore' of 'cairo.Context' objects}
+       15    0.000    0.000    0.090    0.006 profile_native.py:102(timed_rr)
+       15    0.000    0.000    0.000    0.000 cairo2d.py:656(_stroke_style)
+       30    0.000    0.000    0.000    0.000 {method 'save' of 'cairo.Context' objects}
+       15    0.000    0.000    0.000    0.000 sketch.py:235(_end_draw)
+       15    0.000    0.000    0.000    0.000 sketch.py:1176(_queue_sequence_frame)
+
+
+
+--- sorted by cumulative (top 30) ---
+         84690 function calls in 0.093 seconds
+
+   Ordered by: cumulative time
+   List reduced from 61 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    0.092    0.006 sketch.py:819(_render)
+       15    0.000    0.000    0.090    0.006 profile_native.py:102(timed_rr)
+       15    0.000    0.000    0.090    0.006 cairo2d.py:104(render)
+       15    0.000    0.000    0.090    0.006 cairo2d.py:109(draw)
+       15    0.013    0.001    0.090    0.006 cairo2d.py:172(_draw_ops)
+     6240    0.007    0.000    0.028    0.000 cairo2d.py:645(_paint)
+     6270    0.010    0.000    0.014    0.000 cairo2d.py:282(_composite_of)
+     6240    0.005    0.000    0.011    0.000 cairo2d.py:631(_rect_path)
+     6285    0.006    0.000    0.011    0.000 cairo2d.py:604(_source)
+       15    0.011    0.001    0.011    0.001 {method 'paint' of 'cairo.Context' objects}
+     6240    0.008    0.000    0.008    0.000 {method 'fill_preserve' of 'cairo.Context' objects}
+       15    0.007    0.000    0.007    0.000 {method 'stroke' of 'cairo.Context' objects}
+       15    0.005    0.000    0.005    0.000 {method 'fill' of 'cairo.Context' objects}
+     6240    0.005    0.000    0.005    0.000 {method 'rectangle' of 'cairo.Context' objects}
+    18750    0.004    0.000    0.004    0.000 {built-in method builtins.getattr}
+     6285    0.003    0.000    0.003    0.000 {method 'set_source_rgba' of 'cairo.Context' objects}
+    12510    0.003    0.000    0.003    0.000 {method 'new_path' of 'cairo.Context' objects}
+       30    0.001    0.000    0.002    0.000 cairo2d.py:621(_path)
+     6285    0.001    0.000    0.001    0.000 {built-in method builtins.isinstance}
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       15    0.000    0.000    0.001    0.000 sketch.py:736(_view_pixels)
+     2430    0.001    0.000    0.001    0.000 {method 'line_to' of 'cairo.Context' objects}
+       15    0.000    0.000    0.000    0.000 cairo2d.py:97(pixels)
+       15    0.000    0.000    0.000    0.000 sketch.py:716(_view)
+       15    0.000    0.000    0.000    0.000 {method 'get_data' of 'cairo.ImageSurface' objects}
+       15    0.000    0.000    0.000    0.000 cairo2d.py:656(_stroke_style)
+       15    0.000    0.000    0.000    0.000 sketch.py:235(_end_draw)
+       15    0.000    0.000    0.000    0.000 ir.py:259(clear)
+       15    0.000    0.000    0.000    0.000 <string>:2(__init__)
+       30    0.000    0.000    0.000    0.000 {method 'restore' of 'cairo.Context' objects}
+
+

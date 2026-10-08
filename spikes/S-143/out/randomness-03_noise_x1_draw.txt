@@ -1,0 +1,81 @@
+randomness-03_noise x1: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         848460 function calls in 0.608 seconds
+
+   Ordered by: internal time
+   List reduced from 93 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     8670    0.104    0.000    0.134    0.000 noise.py:60(__call__)
+     6315    0.094    0.000    0.182    0.000 dataclasses.py:1782(_replace)
+     6285    0.041    0.000    0.131    0.000 color.py:260(parse)
+   209490    0.039    0.000    0.039    0.000 {built-in method builtins.getattr}
+   125160    0.023    0.000    0.023    0.000 {built-in method builtins.isinstance}
+    93105    0.021    0.000    0.021    0.000 {built-in method math.cos}
+    18720    0.019    0.000    0.028    0.000 color.py:328(_component)
+       15    0.018    0.001    0.671    0.045 03_noise.py:30(draw)
+     6240    0.017    0.000    0.053    0.000 sketch.py:1670(_emit_rect)
+     6285    0.015    0.000    0.023    0.000 color.py:41(__post_init__)
+    24960    0.011    0.000    0.039    0.000 color.py:298(<genexpr>)
+     6255    0.011    0.000    0.382    0.000 sketch.py:1253(fill)
+     6285    0.011    0.000    0.034    0.000 <string>:2(__init__)
+     6315    0.009    0.000    0.196    0.000 dataclasses.py:1763(replace)
+     6240    0.009    0.000    0.080    0.000 api.py:856(rect)
+     6255    0.008    0.000    0.395    0.000 api.py:1507(fill)
+     8670    0.008    0.000    0.152    0.000 api.py:3434(noise)
+     8670    0.008    0.000    0.142    0.000 sketch.py:1972(noise)
+     6285    0.008    0.000    0.140    0.000 color.py:365(parse_in_mode)
+     6315    0.008    0.000    0.210    0.000 state.py:96(update)
+     6240    0.008    0.000    0.067    0.000 sketch.py:1683(rect)
+    15090    0.007    0.000    0.010    0.000 api.py:165(active_sketch)
+     6285    0.006    0.000    0.017    0.000 sketch.py:809(_emit)
+    12480    0.006    0.000    0.008    0.000 color.py:287(<genexpr>)
+     6315    0.006    0.000    0.202    0.000 state.py:65(with_)
+     6285    0.006    0.000    0.151    0.000 sketch.py:1227(<lambda>)
+     6285    0.006    0.000    0.164    0.000 sketch.py:1224(_paint)
+     6285    0.006    0.000    0.159    0.000 paint.py:47(parse_paint)
+     6285    0.005    0.000    0.145    0.000 sketch.py:1207(read_color)
+    26010    0.005    0.000    0.005    0.000 {built-in method math.floor}
+
+
+
+--- sorted by cumulative (top 30) ---
+         848460 function calls in 0.608 seconds
+
+   Ordered by: cumulative time
+   List reduced from 93 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.018    0.001    0.671    0.045 03_noise.py:30(draw)
+     6255    0.008    0.000    0.395    0.000 api.py:1507(fill)
+     6255    0.011    0.000    0.382    0.000 sketch.py:1253(fill)
+     6315    0.008    0.000    0.210    0.000 state.py:96(update)
+     6315    0.006    0.000    0.202    0.000 state.py:65(with_)
+     6315    0.009    0.000    0.196    0.000 dataclasses.py:1763(replace)
+     6315    0.094    0.000    0.182    0.000 dataclasses.py:1782(_replace)
+     6285    0.006    0.000    0.164    0.000 sketch.py:1224(_paint)
+     6285    0.006    0.000    0.159    0.000 paint.py:47(parse_paint)
+     8670    0.008    0.000    0.152    0.000 api.py:3434(noise)
+     6285    0.006    0.000    0.151    0.000 sketch.py:1227(<lambda>)
+     6285    0.005    0.000    0.145    0.000 sketch.py:1207(read_color)
+     8670    0.008    0.000    0.142    0.000 sketch.py:1972(noise)
+     6285    0.008    0.000    0.140    0.000 color.py:365(parse_in_mode)
+     8670    0.104    0.000    0.134    0.000 noise.py:60(__call__)
+     6285    0.041    0.000    0.131    0.000 color.py:260(parse)
+     6240    0.009    0.000    0.080    0.000 api.py:856(rect)
+     6240    0.008    0.000    0.067    0.000 sketch.py:1683(rect)
+     6240    0.017    0.000    0.053    0.000 sketch.py:1670(_emit_rect)
+    24960    0.011    0.000    0.039    0.000 color.py:298(<genexpr>)
+   209490    0.039    0.000    0.039    0.000 {built-in method builtins.getattr}
+     6285    0.011    0.000    0.034    0.000 <string>:2(__init__)
+    18720    0.019    0.000    0.028    0.000 color.py:328(_component)
+     6285    0.015    0.000    0.023    0.000 color.py:41(__post_init__)
+   125160    0.023    0.000    0.023    0.000 {built-in method builtins.isinstance}
+    93105    0.021    0.000    0.021    0.000 {built-in method math.cos}
+     6285    0.006    0.000    0.017    0.000 sketch.py:809(_emit)
+       30    0.000    0.000    0.012    0.000 api.py:2300(end_shape)
+       30    0.000    0.000    0.012    0.000 sketch.py:1843(end_shape)
+       30    0.000    0.000    0.011    0.000 shapes.py:76(build)
+
+

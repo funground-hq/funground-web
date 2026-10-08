@@ -1,0 +1,55 @@
+{
+ "id": "projects-06_kinetic_type",
+ "scale": 2,
+ "mode": "loop",
+ "frames_timed": 12,
+ "canvas": [
+  640,
+  320
+ ],
+ "ms": {
+  "draw": 42.999,
+  "cairo": 10.242,
+  "render": 10.278,
+  "enc_obj": 9.391,
+  "enc_dump": 2.517,
+  "encode": 11.908,
+  "present_other": 0.036
+ },
+ "ops": 633.0,
+ "json_bytes": 136034,
+ "profile": {
+  "frames_profiled": 15,
+  "draw_bucket_ms_per_frame": {
+   "state/colour/geometry": 57.369,
+   "stdlib/3rd-party (random, math, ...)": 19.561,
+   "funground other (noise.py)": 18.154,
+   "dataclasses.replace (state copy)": 12.008,
+   "sketch.py": 6.7,
+   "user": 5.608,
+   "api.py": 5.383,
+   "dataclass-generated (<string>)": 2.493,
+   "ir.py": 0.423,
+   "typography": 0.006,
+   "funground other (__init__.py)": 0.005,
+   "funground other (exploring.py)": 0.002,
+   "funground other (controls.py)": 0.001,
+   "funground other (marks.py)": 0.0
+  },
+  "draw_profiled_total_ms_per_frame": 127.777,
+  "api_py_calls_per_frame": 7599.0,
+  "function_calls_per_frame_draw": 250873.0,
+  "render_bucket_ms_per_frame": {
+   "cairo2d.py": 12.51,
+   "state/colour/geometry": 3.481,
+   "typography": 0.297,
+   "sketch.py": 0.043,
+   "dataclass-generated (<string>)": 0.018,
+   "stdlib/3rd-party (random, math, ...)": 0.012,
+   "ir.py": 0.008,
+   "funground other (headless.py)": 0.002
+  },
+  "render_profiled_total_ms_per_frame": 16.433,
+  "function_calls_per_frame_render": 16039.7
+ }
+}

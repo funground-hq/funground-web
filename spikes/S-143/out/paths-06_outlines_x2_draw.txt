@@ -1,0 +1,81 @@
+paths-06_outlines x2: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         387330 function calls in 0.442 seconds
+
+   Ordered by: internal time
+   List reduced from 164 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     3765    0.079    0.000    0.154    0.000 dataclasses.py:1782(_replace)
+     3405    0.055    0.000    0.092    0.000 pathops.py:43(to_skia)
+   123810    0.031    0.000    0.031    0.000 {built-in method builtins.getattr}
+     3405    0.023    0.000    0.032    0.000 pathops.py:19(_closed_subpaths)
+     3375    0.014    0.000    0.105    0.000 pathops.py:184(contains)
+    42570    0.013    0.000    0.013    0.000 {method 'append' of 'list' objects}
+     3660    0.011    0.000    0.018    0.000 color.py:41(__post_init__)
+      735    0.011    0.000    0.029    0.000 geometry.py:390(transformed)
+       15    0.010    0.001    0.512    0.034 06_outlines.py:47(draw)
+     3375    0.010    0.000    0.034    0.000 sketch.py:1662(circle)
+     3450    0.010    0.000    0.039    0.000 color.py:309(_parse_str)
+    34035    0.008    0.000    0.008    0.000 {built-in method builtins.isinstance}
+     3600    0.008    0.000    0.246    0.000 sketch.py:1253(fill)
+     3840    0.008    0.000    0.052    0.000 color.py:260(parse)
+    12255    0.007    0.000    0.013    0.000 geometry.py:405(<genexpr>)
+     3765    0.007    0.000    0.166    0.000 dataclasses.py:1763(replace)
+       45    0.007    0.000    0.012    0.000 pathops.py:149(expand_stroke)
+     3600    0.006    0.000    0.256    0.000 api.py:1507(fill)
+     3840    0.006    0.000    0.060    0.000 color.py:365(parse_in_mode)
+     3765    0.006    0.000    0.177    0.000 state.py:96(update)
+     8385    0.005    0.000    0.005    0.000 geometry.py:68(apply)
+     7590    0.005    0.000    0.007    0.000 api.py:165(active_sketch)
+     3735    0.005    0.000    0.013    0.000 sketch.py:809(_emit)
+     3765    0.005    0.000    0.171    0.000 state.py:65(with_)
+     3375    0.005    0.000    0.042    0.000 api.py:821(circle)
+     3645    0.005    0.000    0.071    0.000 sketch.py:1224(_paint)
+     3840    0.004    0.000    0.065    0.000 sketch.py:1207(read_color)
+     3630    0.004    0.000    0.061    0.000 sketch.py:1227(<lambda>)
+     5520    0.004    0.000    0.007    0.000 enum.py:677(__call__)
+     3645    0.004    0.000    0.066    0.000 paint.py:47(parse_paint)
+
+
+
+--- sorted by cumulative (top 30) ---
+         387330 function calls in 0.442 seconds
+
+   Ordered by: cumulative time
+   List reduced from 164 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.010    0.001    0.512    0.034 06_outlines.py:47(draw)
+     3600    0.006    0.000    0.256    0.000 api.py:1507(fill)
+     3600    0.008    0.000    0.246    0.000 sketch.py:1253(fill)
+     3765    0.006    0.000    0.177    0.000 state.py:96(update)
+     3765    0.005    0.000    0.171    0.000 state.py:65(with_)
+     3765    0.007    0.000    0.166    0.000 dataclasses.py:1763(replace)
+     3765    0.079    0.000    0.154    0.000 dataclasses.py:1782(_replace)
+     3375    0.003    0.000    0.108    0.000 paths.py:387(contains)
+     3375    0.014    0.000    0.105    0.000 pathops.py:184(contains)
+     3405    0.055    0.000    0.092    0.000 pathops.py:43(to_skia)
+     3645    0.005    0.000    0.071    0.000 sketch.py:1224(_paint)
+     3645    0.004    0.000    0.066    0.000 paint.py:47(parse_paint)
+     3840    0.004    0.000    0.065    0.000 sketch.py:1207(read_color)
+     3630    0.004    0.000    0.061    0.000 sketch.py:1227(<lambda>)
+     3840    0.006    0.000    0.060    0.000 color.py:365(parse_in_mode)
+     3840    0.008    0.000    0.052    0.000 color.py:260(parse)
+     3375    0.005    0.000    0.042    0.000 api.py:821(circle)
+     3450    0.010    0.000    0.039    0.000 color.py:309(_parse_str)
+     3375    0.010    0.000    0.034    0.000 sketch.py:1662(circle)
+     3405    0.023    0.000    0.032    0.000 pathops.py:19(_closed_subpaths)
+   123810    0.031    0.000    0.031    0.000 {built-in method builtins.getattr}
+      735    0.011    0.000    0.029    0.000 geometry.py:390(transformed)
+      375    0.001    0.000    0.020    0.000 paths.py:405(translate)
+     3660    0.011    0.000    0.018    0.000 color.py:41(__post_init__)
+      180    0.001    0.000    0.014    0.000 paths.py:438(rotate)
+     3735    0.005    0.000    0.013    0.000 sketch.py:809(_emit)
+    42570    0.013    0.000    0.013    0.000 {method 'append' of 'list' objects}
+    12255    0.007    0.000    0.013    0.000 geometry.py:405(<genexpr>)
+       45    0.000    0.000    0.012    0.000 paths.py:347(expand_stroke)
+       45    0.007    0.000    0.012    0.000 pathops.py:149(expand_stroke)
+
+

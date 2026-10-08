@@ -1,0 +1,81 @@
+studios-06_poster_series x1: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         175695 function calls in 0.207 seconds
+
+   Ordered by: internal time
+   List reduced from 239 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     1020    0.021    0.000    0.042    0.000 dataclasses.py:1782(_replace)
+      540    0.012    0.000    0.056    0.000 marks.py:400(place)
+     8670    0.009    0.000    0.016    0.000 surface.py:48(_finite)
+     2130    0.009    0.000    0.025    0.000 surface.py:102(__init__)
+    34815    0.009    0.000    0.013    0.000 {built-in method builtins.getattr}
+    30135    0.008    0.000    0.008    0.000 {built-in method builtins.isinstance}
+      495    0.006    0.000    0.012    0.000 color.py:309(_parse_str)
+       60    0.005    0.000    0.005    0.000 {method 'ink_extents' of 'cairo.RecordingSurface' objects}
+      120    0.005    0.000    0.014    0.000 marks.py:130(_local)
+       60    0.005    0.000    0.180    0.003 06_poster_series.py:51(poster)
+     2100    0.005    0.000    0.010    0.000 geometry.py:53(then)
+       15    0.005    0.000    0.234    0.016 exploring.py:170(variations)
+     2700    0.004    0.000    0.006    0.000 marks.py:168(_number)
+     1500    0.003    0.000    0.020    0.000 surface.py:314(__init__)
+     2880    0.003    0.000    0.004    0.000 marks.py:161(_erases)
+    11370    0.003    0.000    0.003    0.000 {built-in method math.isfinite}
+     1575    0.002    0.000    0.022    0.000 surface.py:415(<genexpr>)
+     1020    0.002    0.000    0.046    0.000 dataclasses.py:1763(replace)
+     1020    0.002    0.000    0.049    0.000 state.py:96(update)
+      360    0.002    0.000    0.003    0.000 sketch.py:1465(_line_layout)
+       75    0.002    0.000    0.024    0.000 surface.py:392(_setup)
+     1440    0.002    0.000    0.005    0.000 api.py:3395(random)
+      495    0.002    0.000    0.003    0.000 color.py:41(__post_init__)
+     4950    0.002    0.000    0.002    0.000 {method 'append' of 'list' objects}
+      540    0.002    0.000    0.004    0.000 geometry.py:37(rotation)
+       90    0.002    0.000    0.002    0.000 {function Random.getstate at 0x0000027D71B2DD20}
+     1080    0.002    0.000    0.004    0.000 geometry.py:33(translation)
+     1020    0.001    0.000    0.047    0.000 state.py:65(with_)
+     1035    0.001    0.000    0.004    0.000 sketch.py:809(_emit)
+     1950    0.001    0.000    0.002    0.000 api.py:165(active_sketch)
+
+
+
+--- sorted by cumulative (top 30) ---
+         175695 function calls in 0.207 seconds
+
+   Ordered by: cumulative time
+   List reduced from 239 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    0.236    0.016 06_poster_series.py:82(draw)
+       15    0.001    0.000    0.235    0.016 api.py:3749(variations)
+       15    0.005    0.000    0.234    0.016 exploring.py:170(variations)
+       60    0.005    0.000    0.180    0.003 06_poster_series.py:51(poster)
+      540    0.012    0.000    0.056    0.000 marks.py:400(place)
+     1020    0.002    0.000    0.049    0.000 state.py:96(update)
+     1020    0.001    0.000    0.047    0.000 state.py:65(with_)
+     1020    0.002    0.000    0.046    0.000 dataclasses.py:1763(replace)
+     1020    0.021    0.000    0.042    0.000 dataclasses.py:1782(_replace)
+       60    0.000    0.000    0.026    0.000 api.py:412(grid)
+       75    0.000    0.000    0.025    0.000 surface.py:357(make_grid)
+     2130    0.009    0.000    0.025    0.000 surface.py:102(__init__)
+       75    0.002    0.000    0.024    0.000 surface.py:392(_setup)
+       60    0.001    0.000    0.024    0.000 06_poster_series.py:38(spot)
+     1575    0.002    0.000    0.022    0.000 surface.py:415(<genexpr>)
+      240    0.001    0.000    0.021    0.000 api.py:1507(fill)
+      240    0.001    0.000    0.021    0.000 sketch.py:1253(fill)
+     1500    0.003    0.000    0.020    0.000 surface.py:314(__init__)
+      495    0.001    0.000    0.018    0.000 sketch.py:1224(_paint)
+      495    0.001    0.000    0.017    0.000 paint.py:47(parse_paint)
+      495    0.001    0.000    0.016    0.000 sketch.py:1227(<lambda>)
+     8670    0.009    0.000    0.016    0.000 surface.py:48(_finite)
+      495    0.001    0.000    0.015    0.000 sketch.py:1207(read_color)
+       75    0.000    0.000    0.015    0.000 api.py:796(background)
+      120    0.001    0.000    0.015    0.000 marks.py:264(__exit__)
+      495    0.001    0.000    0.015    0.000 color.py:365(parse_in_mode)
+      480    0.001    0.000    0.014    0.000 marks.py:303(_measure)
+      495    0.001    0.000    0.014    0.000 color.py:260(parse)
+      120    0.005    0.000    0.014    0.000 marks.py:130(_local)
+       60    0.001    0.000    0.014    0.000 exploring.py:156(cell_background)
+
+

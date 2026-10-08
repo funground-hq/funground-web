@@ -1,0 +1,81 @@
+randomness-02_gaussian_and_choice x2: draw() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         604905 function calls in 0.431 seconds
+
+   Ordered by: internal time
+   List reduced from 62 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     6015    0.099    0.000    0.196    0.000 dataclasses.py:1782(_replace)
+   198495    0.040    0.000    0.040    0.000 {built-in method builtins.getattr}
+    12000    0.017    0.000    0.027    0.000 random.py:557(gauss)
+       15    0.016    0.001    0.500    0.033 02_gaussian_and_choice.py:30(draw)
+     6015    0.015    0.000    0.024    0.000 color.py:41(__post_init__)
+     6000    0.014    0.000    0.048    0.000 sketch.py:1662(circle)
+     6015    0.014    0.000    0.054    0.000 color.py:309(_parse_str)
+     6015    0.012    0.000    0.035    0.000 <string>:2(__init__)
+    12000    0.011    0.000    0.048    0.000 api.py:3489(random_gaussian)
+     6000    0.010    0.000    0.329    0.000 sketch.py:1253(fill)
+    48150    0.009    0.000    0.009    0.000 {built-in method builtins.isinstance}
+     6015    0.009    0.000    0.211    0.000 dataclasses.py:1763(replace)
+     6000    0.008    0.000    0.341    0.000 api.py:1507(fill)
+    12000    0.008    0.000    0.035    0.000 sketch.py:1985(random_gaussian)
+     6015    0.008    0.000    0.073    0.000 color.py:365(parse_in_mode)
+     6015    0.007    0.000    0.224    0.000 state.py:96(update)
+     6015    0.007    0.000    0.064    0.000 color.py:260(parse)
+     6000    0.007    0.000    0.020    0.000 random.py:347(choice)
+     6000    0.007    0.000    0.011    0.000 random.py:245(_randbelow_with_getrandbits)
+     6000    0.007    0.000    0.059    0.000 api.py:821(circle)
+     6015    0.006    0.000    0.017    0.000 sketch.py:809(_emit)
+    12030    0.006    0.000    0.008    0.000 api.py:165(active_sketch)
+     6015    0.006    0.000    0.217    0.000 state.py:65(with_)
+     6015    0.006    0.000    0.083    0.000 sketch.py:1227(<lambda>)
+     6015    0.006    0.000    0.096    0.000 sketch.py:1224(_paint)
+     6000    0.005    0.000    0.033    0.000 api.py:3512(random_choice)
+     6015    0.005    0.000    0.090    0.000 paint.py:47(parse_paint)
+     6000    0.005    0.000    0.026    0.000 sketch.py:1991(random_choice)
+    30045    0.005    0.000    0.005    0.000 api.py:150(canvas_sketch)
+     6015    0.005    0.000    0.010    0.000 sketch.py:813(_append)
+
+
+
+--- sorted by cumulative (top 30) ---
+         604905 function calls in 0.431 seconds
+
+   Ordered by: cumulative time
+   List reduced from 62 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.016    0.001    0.500    0.033 02_gaussian_and_choice.py:30(draw)
+     6000    0.008    0.000    0.341    0.000 api.py:1507(fill)
+     6000    0.010    0.000    0.329    0.000 sketch.py:1253(fill)
+     6015    0.007    0.000    0.224    0.000 state.py:96(update)
+     6015    0.006    0.000    0.217    0.000 state.py:65(with_)
+     6015    0.009    0.000    0.211    0.000 dataclasses.py:1763(replace)
+     6015    0.099    0.000    0.196    0.000 dataclasses.py:1782(_replace)
+     6015    0.006    0.000    0.096    0.000 sketch.py:1224(_paint)
+     6015    0.005    0.000    0.090    0.000 paint.py:47(parse_paint)
+     6015    0.006    0.000    0.083    0.000 sketch.py:1227(<lambda>)
+     6015    0.004    0.000    0.077    0.000 sketch.py:1207(read_color)
+     6015    0.008    0.000    0.073    0.000 color.py:365(parse_in_mode)
+     6015    0.007    0.000    0.064    0.000 color.py:260(parse)
+     6000    0.007    0.000    0.059    0.000 api.py:821(circle)
+     6015    0.014    0.000    0.054    0.000 color.py:309(_parse_str)
+     6000    0.014    0.000    0.048    0.000 sketch.py:1662(circle)
+    12000    0.011    0.000    0.048    0.000 api.py:3489(random_gaussian)
+   198495    0.040    0.000    0.040    0.000 {built-in method builtins.getattr}
+     6015    0.012    0.000    0.035    0.000 <string>:2(__init__)
+    12000    0.008    0.000    0.035    0.000 sketch.py:1985(random_gaussian)
+     6000    0.005    0.000    0.033    0.000 api.py:3512(random_choice)
+    12000    0.017    0.000    0.027    0.000 random.py:557(gauss)
+     6000    0.005    0.000    0.026    0.000 sketch.py:1991(random_choice)
+     6015    0.015    0.000    0.024    0.000 color.py:41(__post_init__)
+     6000    0.007    0.000    0.020    0.000 random.py:347(choice)
+     6015    0.006    0.000    0.017    0.000 sketch.py:809(_emit)
+     6000    0.007    0.000    0.011    0.000 random.py:245(_randbelow_with_getrandbits)
+     6015    0.005    0.000    0.010    0.000 sketch.py:813(_append)
+    48150    0.009    0.000    0.009    0.000 {built-in method builtins.isinstance}
+    12030    0.006    0.000    0.008    0.000 api.py:165(active_sketch)
+
+

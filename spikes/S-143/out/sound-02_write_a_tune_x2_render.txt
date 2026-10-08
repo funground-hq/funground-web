@@ -1,0 +1,81 @@
+sound-02_write_a_tune x2: _render() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         139761 function calls (139758 primitive calls) in 0.172 seconds
+
+   Ordered by: internal time
+   List reduced from 160 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     6000    0.051    0.000    0.051    0.000 {method 'stroke' of 'cairo.Context' objects}
+       15    0.025    0.002    0.172    0.011 cairo2d.py:172(_draw_ops)
+       15    0.010    0.001    0.010    0.001 {method 'paint' of 'cairo.Context' objects}
+     6000    0.010    0.000    0.018    0.000 cairo2d.py:656(_stroke_style)
+     6180    0.009    0.000    0.013    0.000 cairo2d.py:282(_composite_of)
+     6285    0.007    0.000    0.010    0.000 cairo2d.py:604(_source)
+      660    0.005    0.000    0.009    0.000 geometry.py:259(arc_to)
+    18541    0.004    0.000    0.004    0.000 {built-in method builtins.getattr}
+      105    0.004    0.000    0.008    0.000 geometry.py:390(transformed)
+     6000    0.003    0.000    0.021    0.000 cairo2d.py:662(_state_stroke_style)
+     6000    0.003    0.000    0.003    0.000 {method 'set_dash' of 'cairo.Context' objects}
+      165    0.003    0.000    0.003    0.000 {method 'fill_preserve' of 'cairo.Context' objects}
+     7355    0.003    0.000    0.003    0.000 {method 'line_to' of 'cairo.Context' objects}
+     6285    0.003    0.000    0.003    0.000 {method 'set_source_rgba' of 'cairo.Context' objects}
+      270    0.002    0.000    0.004    0.000 cairo2d.py:621(_path)
+     6316    0.002    0.000    0.002    0.000 {method 'move_to' of 'cairo.Context' objects}
+     6000    0.002    0.000    0.002    0.000 {method 'set_line_width' of 'cairo.Context' objects}
+     5213    0.002    0.000    0.004    0.000 geometry.py:405(<genexpr>)
+      105    0.002    0.000    0.002    0.000 {method 'fill' of 'cairo.Context' objects}
+     6435    0.002    0.000    0.002    0.000 {method 'new_path' of 'cairo.Context' objects}
+     6000    0.002    0.000    0.002    0.000 {method 'set_line_cap' of 'cairo.Context' objects}
+     6000    0.002    0.000    0.002    0.000 {method 'set_line_join' of 'cairo.Context' objects}
+     6000    0.002    0.000    0.002    0.000 {method 'set_miter_limit' of 'cairo.Context' objects}
+     3291    0.002    0.000    0.002    0.000 geometry.py:68(apply)
+     6345    0.001    0.000    0.001    0.000 {built-in method builtins.isinstance}
+      165    0.001    0.000    0.011    0.000 geometry.py:204(rounded_rect)
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+       15    0.001    0.000    0.011    0.001 typography.py:219(outline_ops)
+      660    0.001    0.000    0.001    0.000 geometry.py:142(cubic_to)
+     2640    0.001    0.000    0.001    0.000 {built-in method math.radians}
+
+
+
+--- sorted by cumulative (top 30) ---
+         139761 function calls (139758 primitive calls) in 0.172 seconds
+
+   Ordered by: cumulative time
+   List reduced from 160 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    0.174    0.012 sketch.py:819(_render)
+       15    0.000    0.000    0.173    0.012 profile_native.py:102(timed_rr)
+       15    0.000    0.000    0.172    0.011 cairo2d.py:104(render)
+       15    0.000    0.000    0.172    0.011 cairo2d.py:109(draw)
+       15    0.025    0.002    0.172    0.011 cairo2d.py:172(_draw_ops)
+     6000    0.051    0.000    0.051    0.000 {method 'stroke' of 'cairo.Context' objects}
+     6000    0.003    0.000    0.021    0.000 cairo2d.py:662(_state_stroke_style)
+     6000    0.010    0.000    0.018    0.000 cairo2d.py:656(_stroke_style)
+     6180    0.009    0.000    0.013    0.000 cairo2d.py:282(_composite_of)
+      165    0.001    0.000    0.013    0.000 cairo2d.py:631(_rect_path)
+       15    0.000    0.000    0.013    0.001 cairo2d.py:754(_text_ops)
+       15    0.001    0.000    0.011    0.001 typography.py:219(outline_ops)
+      165    0.001    0.000    0.011    0.000 geometry.py:204(rounded_rect)
+     6285    0.007    0.000    0.010    0.000 cairo2d.py:604(_source)
+       15    0.010    0.001    0.010    0.001 {method 'paint' of 'cairo.Context' objects}
+      660    0.005    0.000    0.009    0.000 geometry.py:259(arc_to)
+      105    0.004    0.000    0.008    0.000 geometry.py:390(transformed)
+      270    0.002    0.000    0.004    0.000 cairo2d.py:621(_path)
+    18541    0.004    0.000    0.004    0.000 {built-in method builtins.getattr}
+     5213    0.002    0.000    0.004    0.000 geometry.py:405(<genexpr>)
+      165    0.000    0.000    0.004    0.000 cairo2d.py:645(_paint)
+     6000    0.003    0.000    0.003    0.000 {method 'set_dash' of 'cairo.Context' objects}
+      165    0.003    0.000    0.003    0.000 {method 'fill_preserve' of 'cairo.Context' objects}
+     7355    0.003    0.000    0.003    0.000 {method 'line_to' of 'cairo.Context' objects}
+     6285    0.003    0.000    0.003    0.000 {method 'set_source_rgba' of 'cairo.Context' objects}
+     6316    0.002    0.000    0.002    0.000 {method 'move_to' of 'cairo.Context' objects}
+     6000    0.002    0.000    0.002    0.000 {method 'set_line_width' of 'cairo.Context' objects}
+      105    0.002    0.000    0.002    0.000 {method 'fill' of 'cairo.Context' objects}
+     6435    0.002    0.000    0.002    0.000 {method 'new_path' of 'cairo.Context' objects}
+     6000    0.002    0.000    0.002    0.000 {method 'set_line_cap' of 'cairo.Context' objects}
+
+

@@ -1,0 +1,81 @@
+paths-06_outlines x1: _render() profile, 15 frames
+
+--- sorted by tottime (top 30) ---
+         165801 function calls in 0.188 seconds
+
+   Ordered by: internal time
+   List reduced from 98 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+      660    0.028    0.000    0.069    0.000 geometry.py:390(transformed)
+      900    0.028    0.000    0.028    0.000 {method 'fill' of 'cairo.Context' objects}
+    44190    0.021    0.000    0.035    0.000 geometry.py:405(<genexpr>)
+     3375    0.016    0.000    0.016    0.000 {method 'fill_preserve' of 'cairo.Context' objects}
+       15    0.014    0.001    0.194    0.013 cairo2d.py:172(_draw_ops)
+    30000    0.014    0.000    0.014    0.000 geometry.py:68(apply)
+      945    0.011    0.000    0.018    0.000 cairo2d.py:621(_path)
+     3720    0.006    0.000    0.009    0.000 cairo2d.py:282(_composite_of)
+     4350    0.005    0.000    0.008    0.000 cairo2d.py:604(_source)
+     3390    0.005    0.000    0.028    0.000 cairo2d.py:645(_paint)
+     3375    0.004    0.000    0.004    0.000 {method 'arc' of 'cairo.Context' objects}
+     9555    0.004    0.000    0.004    0.000 {method 'curve_to' of 'cairo.Context' objects}
+       45    0.004    0.000    0.082    0.002 typography.py:219(outline_ops)
+    14880    0.003    0.000    0.003    0.000 {method 'append' of 'list' objects}
+    10590    0.002    0.000    0.002    0.000 {built-in method builtins.getattr}
+       15    0.002    0.000    0.002    0.000 {method 'paint' of 'cairo.Context' objects}
+     7725    0.002    0.000    0.002    0.000 {method 'new_path' of 'cairo.Context' objects}
+       45    0.002    0.000    0.002    0.000 {method 'stroke' of 'cairo.Context' objects}
+     4305    0.002    0.000    0.002    0.000 {method 'set_source_rgba' of 'cairo.Context' objects}
+      660    0.001    0.000    0.003    0.000 geometry.py:53(then)
+     4245    0.001    0.000    0.001    0.000 {method 'line_to' of 'cairo.Context' objects}
+     4350    0.001    0.000    0.001    0.000 {built-in method builtins.isinstance}
+       15    0.001    0.000    0.001    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+     3378    0.001    0.000    0.001    0.000 {built-in method builtins.max}
+      660    0.001    0.000    0.002    0.000 geometry.py:48(scaling)
+      660    0.001    0.000    0.002    0.000 geometry.py:81(is_identity)
+      660    0.001    0.000    0.002    0.000 geometry.py:33(translation)
+     1305    0.001    0.000    0.001    0.000 {method 'close_path' of 'cairo.Context' objects}
+      945    0.000    0.000    0.001    0.000 geometry.py:297(__iter__)
+     1350    0.000    0.000    0.000    0.000 {method 'move_to' of 'cairo.Context' objects}
+
+
+
+--- sorted by cumulative (top 30) ---
+         165801 function calls in 0.188 seconds
+
+   Ordered by: cumulative time
+   List reduced from 98 to 30 due to restriction <30>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       15    0.000    0.000    0.195    0.013 sketch.py:819(_render)
+       15    0.000    0.000    0.194    0.013 profile_native.py:102(timed_rr)
+       15    0.000    0.000    0.194    0.013 cairo2d.py:104(render)
+       15    0.000    0.000    0.194    0.013 cairo2d.py:109(draw)
+       15    0.014    0.001    0.194    0.013 cairo2d.py:172(_draw_ops)
+       45    0.000    0.000    0.083    0.002 cairo2d.py:754(_text_ops)
+       45    0.004    0.000    0.082    0.002 typography.py:219(outline_ops)
+      660    0.028    0.000    0.069    0.000 geometry.py:390(transformed)
+    44190    0.021    0.000    0.035    0.000 geometry.py:405(<genexpr>)
+     3390    0.005    0.000    0.028    0.000 cairo2d.py:645(_paint)
+      900    0.028    0.000    0.028    0.000 {method 'fill' of 'cairo.Context' objects}
+      945    0.011    0.000    0.018    0.000 cairo2d.py:621(_path)
+     3375    0.016    0.000    0.016    0.000 {method 'fill_preserve' of 'cairo.Context' objects}
+    30000    0.014    0.000    0.014    0.000 geometry.py:68(apply)
+     3720    0.006    0.000    0.009    0.000 cairo2d.py:282(_composite_of)
+     4350    0.005    0.000    0.008    0.000 cairo2d.py:604(_source)
+     3375    0.004    0.000    0.004    0.000 {method 'arc' of 'cairo.Context' objects}
+     9555    0.004    0.000    0.004    0.000 {method 'curve_to' of 'cairo.Context' objects}
+    14880    0.003    0.000    0.003    0.000 {method 'append' of 'list' objects}
+      660    0.001    0.000    0.003    0.000 geometry.py:53(then)
+    10590    0.002    0.000    0.002    0.000 {built-in method builtins.getattr}
+      660    0.001    0.000    0.002    0.000 geometry.py:81(is_identity)
+       15    0.002    0.000    0.002    0.000 {method 'paint' of 'cairo.Context' objects}
+     7725    0.002    0.000    0.002    0.000 {method 'new_path' of 'cairo.Context' objects}
+      660    0.001    0.000    0.002    0.000 geometry.py:48(scaling)
+       45    0.002    0.000    0.002    0.000 {method 'stroke' of 'cairo.Context' objects}
+     4305    0.002    0.000    0.002    0.000 {method 'set_source_rgba' of 'cairo.Context' objects}
+      660    0.001    0.000    0.002    0.000 geometry.py:33(translation)
+     4245    0.001    0.000    0.001    0.000 {method 'line_to' of 'cairo.Context' objects}
+     4350    0.001    0.000    0.001    0.000 {built-in method builtins.isinstance}
+
+
