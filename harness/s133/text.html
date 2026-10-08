@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>S-133 text corpus</title>
+<body style="font:12px monospace"><pre id="log">loading</pre>
+<script type="module">
+// Runs the whole corpus in a module worker, then the timings, and POSTs one JSON result to /result.
+const q = new URLSearchParams(location.search);
+const log = (s) => { document.getElementById("log").textContent += "\n" + s; };
+const R = { ua: navigator.userAgent };
+const worker = new Worker("text_worker.js", { type: "module" });
+const ask = (msg) => new Promise((res, rej) => { worker.onmessage = (e) => (e.data.type === "error" ? rej(new Error(e.data.message)) : res(e.data)); worker.postMessage(msg); });
+try {
+  const cases = await (await fetch("../../spikes/S-133/corpus.json")).json();
+  const t0 = performance.now();
+  const ready = await ask({ type: "boot", wheel: q.get("wheel") === "1" });
+  R.boot = ready.phases; R.sizes = ready.sizes; R.hb_version = ready.hb_version; R.fonttools = ready.fonttools; R.boot_wall_ms = performance.now() - t0;
+  log("ready " + JSON.stringify(ready.phases));
+  const dumpIds = q.get("dump");
+  if (dumpIds) R.dump = (await ask({ type: "dump", cases, ids: dumpIds.split(",").map(Number) })).r;
+  else {
+    const run = (await ask({ type: "run", cases })).r;
+    R.run = run; log("corpus done in " + run.seconds.toFixed(1) + " s");
+    const pick = cases.filter((c, i) => i % 4 === 0);                          // every 4th case for timings
+    R.timing = (await ask({ type: "time", cases: pick, repeat: 3 })).r;
+    log("timing " + JSON.stringify(R.timing));
+  }
+} catch (err) { R.error = String(err); log(R.error); }
+await fetch("/result", { method: "POST", body: JSON.stringify(R) });
+document.title = "done";
+</script>

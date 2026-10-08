@@ -1,0 +1,200 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>S-133 text in the worker loop</title>
+<body style="font:12px monospace;margin:8px">
+<p>funground in a module worker, driven by requestAnimationFrame (spike S-136).
+<code>?sketch=08_mouse&amp;seconds=10&amp;canvas=main|worker&amp;synth=mouse|key|none&amp;post=1&amp;hang=1</code></p>
+<button id="stop">Stop</button> <span id="status">loading</span>
+<div><canvas id="c" width="640" height="400" style="border:1px solid #888"></canvas></div>
+<pre id="log"></pre>
+<script type="module">
+import { IrCanvasRenderer } from "../../renderer/ir_canvas.js";
+
+const q = new URLSearchParams(location.search);
+const SKETCH = q.get("sketch") || "08_mouse";
+const SECONDS = Number(q.get("seconds") || 10);
+const CANVAS = q.get("canvas") || "main";              // main: the page draws; worker: OffscreenCanvas in the worker
+const SYNTH = q.get("synth") || "none";                // synthesised input: mouse | key | none
+const FRAMES = Number(q.get("frames") || 0);            // S-133: stop after this many frames and send the canvas as a PNG
+const HANG = q.get("hang") === "1";                    // the sketch spins forever after 30 frames; Stop comes 2 s later
+const $ = (id) => document.getElementById(id);
+const log = (s) => { $("log").textContent += s + "\n"; };
+const canvasEl = $("c");
+const R = { sketch: SKETCH, canvas: CANVAS, synth: SYNTH, ua: navigator.userAgent, dpr: devicePixelRatio, cross_origin_isolated: self.crossOriginIsolated, shared_array_buffer: typeof SharedArrayBuffer !== "undefined" };
+const series = { py_step: [], py_encode: [], post: [], parse: [], draw: [], roundtrip: [] };
+const probes = [];                                       // {seq, t_in, n_in, kind, want|base, done}
+
+const worker = new Worker("worker.js", { type: "module" });
+let renderer = null, size = null, inflight = false, stopped = false, finished = false;
+let rafCount = 0, drawn = 0, dropped = 0, lastPost = 0;
+const rafTimes = [];
+let evSeq = 0, queue = [], lastC0x = null, tStart = 0, tFirstFrame = null;
+
+// ---- DOM events -> funground events (logical pixels, funground key names)
+const KEYS = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", Enter: "enter", Escape: "escape" };
+const keyName = (k) => KEYS[k] || k;
+function push(e) { queue.push({ ...e, _seq: ++evSeq }); return evSeq; }
+const pos = (ev) => { const r = canvasEl.getBoundingClientRect(); return [Math.round(ev.clientX - r.left), Math.round(ev.clientY - r.top)]; };
+const BUT = ["left", "center", "right"];
+canvasEl.addEventListener("mousemove", (ev) => { const [x, y] = pos(ev); push({ kind: ev.buttons ? "mouse_dragged" : "mouse_moved", x, y }); });
+canvasEl.addEventListener("mousedown", (ev) => { const [x, y] = pos(ev); push({ kind: "mouse_pressed", x, y, button: BUT[ev.button] }); });
+canvasEl.addEventListener("mouseup", (ev) => { const [x, y] = pos(ev); push({ kind: "mouse_released", x, y, button: BUT[ev.button] }); });
+window.addEventListener("keydown", (ev) => { if (!ev.repeat) push({ kind: "key_pressed", key: keyName(ev.key), key_code: ev.keyCode }); });
+window.addEventListener("keyup", (ev) => push({ kind: "key_released", key: keyName(ev.key), key_code: ev.keyCode }));
+
+// ---- Stop = terminate (no SharedArrayBuffer, no cooperation from the sketch)
+function stop(why) {
+  if (stopped) return;
+  stopped = true;
+  const t = performance.now();
+  worker.terminate();
+  R.stop = { why, terminate_call_ms: performance.now() - t };
+  $("status").textContent = "stopped";
+}
+$("stop").onclick = () => { stop("button"); finish(); };
+
+worker.onerror = (e) => { R.error = String(e.message || e); finish(); };
+let heartbeats = 0, lastHb = 0;
+worker.onmessage = (e) => { try { onWorkerMessage(e); } catch (err) { R.error = String(err.stack || err); log(R.error); finish(); } };
+function onWorkerMessage(e) {
+  const m = e.data;
+  if (m === "hb") { heartbeats++; lastHb = performance.now(); return; }   // the hang sketch posts these while it spins
+  if (m.type === "error") { R.error = m.message; log(m.message); finish(); return; }
+  if (m.type === "ready") { onReady(m); return; }
+  if (m.type === "frame") onFrame(m, performance.now());
+};
+
+function onReady(m) {
+  R.boot = m.phases; size = m.size;
+  R.ready_ms_since_navigation = performance.now();
+  if (CANVAS === "main") {
+    canvasEl.width = Math.round(size[0] * size[2]); canvasEl.height = Math.round(size[1] * size[2]);
+    canvasEl.style.width = size[0] + "px"; canvasEl.style.height = size[1] + "px";
+  }
+  $("status").textContent = "running";
+  tStart = performance.now();
+  requestAnimationFrame(raf);
+  if (SYNTH !== "none") setTimeout(synthLoop, 1500);
+  if (HANG) hangTest();
+}
+
+function raf(ts) {
+  if (stopped || finished) return;
+  rafCount++; rafTimes.push(ts);
+  if (!inflight) {
+    const events = queue; queue = [];
+    const maxEventSeq = evSeq;                          // every event up to this one is in this step
+    inflight = true; lastPost = performance.now();
+    worker.postMessage({ type: "step", t: ts, seq: rafCount, maxEventSeq, events: JSON.stringify(events.map(({ _seq, ...e }) => e)) });
+  } else dropped++;
+  if (!HANG && performance.now() - tStart >= SECONDS * 1000) { finish(); return; }
+  requestAnimationFrame(raf);
+}
+
+function onFrame(m, tRecv) {
+  inflight = false;
+  series.py_step.push(m.py.step); series.py_encode.push(m.py.encode);
+  series.roundtrip.push(tRecv - lastPost);
+  let drawMs = m.drawMs, parseMs = m.parseMs, c0x = m.c0x;
+  if (m.ops !== undefined) {                      // canvas=main: parse and draw here
+    series.post.push(performance.timeOrigin + tRecv - m.tSent);
+    if (!renderer) renderer = new IrCanvasRenderer(canvasEl, { width: size[0], height: size[1], scale: size[2], getBlob: () => null });
+    let t = performance.now();
+    const ops = JSON.parse(m.ops);
+    parseMs = performance.now() - t;
+    t = performance.now();
+    renderer.drawFrame(ops);
+    drawMs = performance.now() - t;
+    c0x = null; for (const o of ops) if (o.op === "Circle") { c0x = o.x; break; }
+  } else {
+    series.post.push(performance.timeOrigin + tRecv - m.tSent);   // worker canvas: only the small message
+  }
+  series.parse.push(parseMs); series.draw.push(drawMs);
+  const tDone = performance.now();
+  drawn++;
+  if (tFirstFrame === null) { tFirstFrame = tDone; R.first_frame_ms_since_navigation = tDone; }
+  // latency: a probe is answered by the first frame, after the worker consumed its event, that shows its effect
+  for (const p of probes) {
+    if (p.done || m.consumed < p.seq) continue;
+    const hit = p.kind === "mouse" ? c0x === p.want : (c0x !== null && p.base !== null && c0x !== p.base);
+    if (hit) { p.done = true; p.ms = tDone - p.t_in; p.callbacks = rafCount - p.n_in; }
+  }
+  lastC0x = c0x;
+  if (FRAMES && drawn >= FRAMES) { R.png = canvasEl.toDataURL("image/png"); R.frames_stepped = drawn; finish(); return; }
+  if (!m.running) finish();
+}
+
+// ---- synthesised input, dispatched on the real DOM listeners
+function synthLoop() {
+  let i = 0;
+  if (SYNTH === "mouse") {                        // hold a button for the rest of the run, as in a drag
+    const rect = canvasEl.getBoundingClientRect();
+    canvasEl.dispatchEvent(new MouseEvent("mousedown", { clientX: rect.left + 100, clientY: rect.top + 100, button: 0, buttons: 1, bubbles: true }));
+  }
+  const next = () => {
+    if (stopped || finished) return;
+    const t_in = performance.now();
+    if (SYNTH === "mouse") {
+      const x = 40 + ((i * 53) % 560), y = 60 + ((i * 29) % 240);
+      const rect = canvasEl.getBoundingClientRect();
+      canvasEl.dispatchEvent(new MouseEvent("mousemove", { clientX: rect.left + x, clientY: rect.top + y, buttons: 1, bubbles: true }));
+      probes.push({ kind: "mouse", seq: evSeq, t_in, n_in: rafCount, want: x });
+    } else {
+      const down = i % 2 === 0;
+      window.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", { key: "ArrowRight", keyCode: 39, bubbles: true }));
+      if (down) probes.push({ kind: "key", seq: evSeq, t_in, n_in: rafCount, base: lastC0x });
+    }
+    i++;
+    setTimeout(next, 70 + (i * 7) % 23);          // an odd interval, so events land at different points in a frame
+  };
+  next();
+}
+
+// ---- the hang test: 30 frames, then the sketch loops forever inside draw()
+async function hangTest() {
+  await new Promise((r) => setTimeout(r, 1500));          // 30 frames, then the sketch hangs
+  const rafAtHang = rafCount, drawnBefore = drawn;
+  await new Promise((r) => setTimeout(r, 2000));          // the page must stay alive meanwhile
+  R.hang = { still_waiting_for_frame: inflight, page_raf_callbacks_during_2s: rafCount - rafAtHang, frames_drawn_during_2s: drawn - drawnBefore };
+  const hbBefore = heartbeats, t = performance.now();
+  stop("hang test");
+  const before = drawn;
+  await new Promise((r) => setTimeout(r, 1000));
+  R.hang.messages_after_stop = drawn - before;
+  R.hang.heartbeats_while_spinning = hbBefore;
+  R.hang.heartbeats_after_stop = heartbeats - hbBefore;
+  R.hang.last_heartbeat_ms_before_stop = t - lastHb;
+  R.hang.stop_to_terminated_ms = R.stop.terminate_call_ms;
+  R.hang.observed_quiet_after_ms = performance.now() - t;
+  finish();
+}
+
+const pct = (a, p) => { const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+const stat = (a) => a.length ? { n: a.length, mean: a.reduce((x, y) => x + y, 0) / a.length, p50: pct(a, 0.5), p95: pct(a, 0.95), max: Math.max(...a) } : null;
+
+async function finish() {
+  if (finished) return;
+  finished = true;
+  const elapsed = (performance.now() - tStart) / 1000;
+  const intervals = rafTimes.slice(1).map((t, i) => t - rafTimes[i]);
+  R.seconds = elapsed; R.raf_callbacks = rafCount; R.raf_hz = rafCount / elapsed;
+  R.frames_drawn = drawn; R.fps = drawn / elapsed; R.dropped_ticks = dropped;
+  R.raf_interval_ms = stat(intervals);
+  R.py_step_ms = stat(series.py_step); R.py_encode_ms = stat(series.py_encode);
+  R.transfer_ms = stat(series.post); R.parse_ms = stat(series.parse); R.draw_ms = stat(series.draw);
+  R.roundtrip_ms = stat(series.roundtrip);
+  const done = probes.filter((p) => p.done);
+  R.probes = { n: probes.length, answered: done.length, ms: stat(done.map((p) => p.ms)), raf_callbacks: stat(done.map((p) => p.callbacks)) };
+  if (CANVAS === "main") { const d = canvasEl.getContext("2d").getImageData(0, 0, canvasEl.width, canvasEl.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] !== 255 || d[i + 1] !== 255 || d[i + 2] !== 255) n++; R.non_white_pixels = n; }
+  document.title = "done";
+  $("status").textContent = "done";
+  log(JSON.stringify(R, null, 1));
+  if (q.get("post")) await fetch("/result", { method: "POST", body: JSON.stringify(R) });
+  if (!stopped) { stopped = true; worker.terminate(); }
+}
+
+if (CANVAS === "worker") {
+  const off = canvasEl.transferControlToOffscreen();
+  worker.postMessage({ type: "boot", sketch: SKETCH, canvas: off, wheel: q.get("wheel") === "1" }, [off]);
+} else worker.postMessage({ type: "boot", sketch: SKETCH, wheel: q.get("wheel") === "1" });
+</script>
