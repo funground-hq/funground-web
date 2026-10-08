@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>S-148 profile</title>
+<body style="font:12px monospace"><span id="status">loading</span>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const ROUTE = q.get("route") || "canvas";
+const REPS = Number(q.get("reps") || 12);
+const base = new URL("../s142/", location.href).href;     // dist/ lives under harness/s142
+const R = { route: ROUTE, ua: navigator.userAgent, cases: [] };
+const worker = new Worker("prof_worker.js", { type: "module" });
+const queue = [];
+let waiter = null, pmRecs = [];
+const pct = (a, p) => { const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+worker.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === "pmmsg") {
+    const lat = performance.timeOrigin + performance.now() - m.tSent;
+    let dec = 0;
+    if (m.kind === "string") { const t = performance.now(); JSON.parse(m.payload); dec = performance.now() - t; }
+    else if (m.kind === "buffer") { const t = performance.now(); JSON.parse(new TextDecoder().decode(m.payload)); dec = performance.now() - t; }
+    pmRecs.push({ kind: m.kind, lat, dec });
+    worker.postMessage({ type: "ack" });
+    return;
+  }
+  if (waiter) { const w = waiter; waiter = null; m.type === "error" ? w.reject(new Error(m.message)) : w.resolve(m); } else queue.push(m);
+};
+const wait = () => new Promise((resolve, reject) => {
+  if (queue.length) { const m = queue.shift(); return m.type === "error" ? reject(new Error(m.message)) : resolve(m); }
+  waiter = { resolve, reject };
+});
+const med = (a) => a.length ? pct(a, 0.5) : null;
+(async () => {
+  try {
+    worker.postMessage({ type: "boot", route: ROUTE, base });
+    await wait();
+    const cases = (await (await fetch(base + "dist/cases.json")).json()).filter((c) => c.group === "heavy");
+    for (const c of cases) {
+      document.getElementById("status").textContent = "profiling " + c.id;
+      const rec = { id: c.id };
+      try {
+        worker.postMessage({ type: "prof", id: c.id, kind: c.kind, scale: 1, pygame: c.pygame });
+        const m = await wait();
+        rec.prof = JSON.parse(m.result);
+        if (ROUTE === "canvas") {
+          pmRecs = [];
+          worker.postMessage({ type: "pm", reps: REPS });
+          const d = await wait();
+          rec.pm = { nOps: d.nOps, bytes: d.bytes };
+          for (const kind of ["string", "object", "buffer", "flat"]) {
+            const rs = pmRecs.filter((r) => r.kind === kind);
+            rec.pm[kind] = { sender_ms: med(d.sender[kind]), latency_ms: med(rs.map((r) => r.lat)), page_decode_ms: med(rs.map((r) => r.dec)) };
+          }
+        }
+      } catch (err) { rec.error = String(err.message || err); }
+      R.cases.push(rec);
+    }
+  } catch (err) { R.fatal = String(err.message || err); }
+  document.title = "done";
+  await fetch("/result", { method: "POST", body: JSON.stringify(R) });
+  worker.terminate();
+})();
+</script>

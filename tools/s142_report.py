@@ -1,13 +1,14 @@
-r"""Turn results_s142/*.json into the tables of spikes/S-142_RESULTS.md (printed as Markdown).
+r"""Turn results_s148/*.json into the tables of spikes/S-142_RESULTS.md (printed as Markdown).
 
-    C:\Projects\playground\.venv\Scripts\python.exe tools/s142_report.py > results_s142/tables.md
+    C:\Projects\playground\.venv\Scripts\python.exe tools/s142_report.py > results_s148/tables.md
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-R = Path(__file__).resolve().parent.parent / "results_s142"
+R = Path(__file__).resolve().parent.parent / "results_s148"
+REPEATS = ["", ".r2", ".r3"]                     
 VARIANTS = [("native", "cairo"), ("chrome", "cairo", "main"), ("chrome", "cairo", "worker"),
             ("native", "canvas"), ("chrome", "canvas", "main"), ("chrome", "canvas", "worker")]
 NAMES = {("native", "cairo"): "native Cairo", ("chrome", "cairo", "main"): "Chrome Cairo, page paints",
@@ -53,7 +54,7 @@ def get_all():
     for dpr in (1, 2):
         for v in VARIANTS:
             stem = f"native-{v[1]}-{dpr}x" if v[0] == "native" else f"browser-{v[1]}-{v[2]}-{dpr}x"
-            files = [stem + ".json", stem + ".r2.json", stem + ".r3.json"]
+            files = [stem + sfx + ".json" for sfx in REPEATS]
             runs = [load(x) for x in files]
             per = {}
             for d in runs:

@@ -22,7 +22,7 @@ from pathlib import Path
 
 WEB = Path(__file__).resolve().parent.parent
 SCRATCH = Path(r"C:\Users\samirj\AppData\Local\Temp\claude")
-SRC = Path(os.environ.get("FUNGROUND_SRC", SCRATCH / "fg_s136"))
+SRC = Path(os.environ.get("FUNGROUND_SRC", SCRATCH / "fg_s148"))
 CORE = Path(os.environ.get("FUNGROUND_CORE", r"C:\Projects\playground-0.2"))
 DIST = WEB / "harness" / "s142" / "dist"
 WARM, REPS, SWARM, SREPS = 5, 30, 1, 10
@@ -134,7 +134,7 @@ def main():
         ph = r.get("phases")
         print(r["id"], r.get("error") or {k: ph[k]["median"] for k in ("step", "draw", "render", "encode", "copy")}, r.get("pixels", ""), flush=True)
     res["seconds"] = time.perf_counter() - t
-    out = Path(a.out) if a.out else WEB / "results_s142" / f"native-{a.route}-{int(a.scale)}x.json"
+    out = Path(a.out) if a.out else WEB / "results_s148" / f"native-{a.route}-{int(a.scale)}x.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps(res, indent=1), encoding="utf-8")
 

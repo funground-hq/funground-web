@@ -1,11 +1,11 @@
-r"""Compare the canvas snapshots of the S-142 runs (results_s142/snaps/<run>/<route>-<where>-<case>.png) with the goldens.
+r"""Compare the canvas snapshots of the S-142 runs (results_s148/snaps/<run>/<route>-<where>-<case>.png) with the goldens.
 
     C:\Projects\playground\.venv\Scripts\python.exe tools/s142_pixels.py [run ...]      # default: every run with snapshots
 
 Each snapshot is the canvas read back (getImageData) after the 30th frame (a script: after its run), at devicePixelRatio 1.
 Per snapshot: byte-identical to the golden (RGB), or S-135's measures (compare.py): percent of pixels differing by more than 8,
 mean absolute difference, max difference, differences away from edges; "pass" = S-135's tolerance (<= 3 % of pixels, mean <= 3,
-edges only). Writes results_s142/pixels.json.
+edges only). Writes results_s148/pixels.json.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import compare as C                      # noqa: E402  (S-135's helpers)
 
 WEB = Path(__file__).resolve().parent.parent
 CORE = Path(r"C:\Projects\playground-0.2")
-SNAPS = WEB / "results_s142" / "snaps"
+SNAPS = WEB / "results_s148" / "snaps"
 
 
 def golden_for(case: str) -> Path | None:
@@ -71,7 +71,7 @@ def main() -> None:
             out[f"{run}/{name}"] = r
             print(f"{run:28s} {case:36s} " + ("byte-identical" if r["identical"] else
                   f"diff={r['diff_pct']:.2f}% mean={r['mean_abs']:.2f} max={r['max_diff']} off_edge={r['off_edge_pct']:.3f}% {'PASS' if r['pass'] else 'FAIL'}"))
-    (WEB / "results_s142" / "pixels.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
+    (WEB / "results_s148" / "pixels.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
 
 
 if __name__ == "__main__":

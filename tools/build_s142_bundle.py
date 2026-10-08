@@ -4,7 +4,7 @@ r"""Build harness/s142/dist/ for the S-142 spike.
 
 Inputs (read only):
   FUNGROUND_SRC   a folder holding funground/ of the branch with the split loop (default
-                  <scratch>/fg_s136, made with: git -C C:/Projects/playground-0.2 archive spike/s136-loop funground | tar -x)
+                  <scratch>/fg_s148, made with: git -C C:/Projects/playground-0.2 archive spike/s136-loop funground | tar -x)
   FUNGROUND_CORE  C:/Projects/playground-0.2 (examples/ and tests/golden/, unchanged by the loop branch)
   WHEELS          the CI artifact of funground-cairo-wasm run 37768002634 (pycairo, skia-pathops, uharfbuzz wheels)
 Writes dist/funground.zip (funground/ with renderers/cairo2d.py, without platform/pygame_platform.py, gallery.py
@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 
 SCRATCH = Path(r"C:\Users\samirj\AppData\Local\Temp\claude")
-SRC = Path(os.environ.get("FUNGROUND_SRC", SCRATCH / "fg_s136"))
+SRC = Path(os.environ.get("FUNGROUND_SRC", SCRATCH / "fg_s148"))
 CORE = Path(os.environ.get("FUNGROUND_CORE", r"C:\Projects\playground-0.2"))
 WHEELS = Path(os.environ.get("WHEELS", SCRATCH / "wheels142"))
 OUT = Path(__file__).resolve().parent.parent / "harness" / "s142" / "dist"

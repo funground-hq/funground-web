@@ -4,7 +4,7 @@ r"""Run one S-142 page in headless Chrome and save its result.
                                                                        [--cases a,b] [--no-check] [--name NAME]
 
 A localhost server (this script) serves the repository, counts the bytes it sends, receives the page's result by POST
-(/result) and its canvas snapshots (/snap, raw RGBA, saved as PNG in results_s142/snaps/). Chrome (--headless=new, a fresh
+(/result) and its canvas snapshots (/snap, raw RGBA, saved as PNG in results_s148/snaps/). Chrome (--headless=new, a fresh
 profile in the scratch folder) is one process tree, stopped by its PID when the result arrives or on timeout.
 --dpr 2 runs Chrome with --force-device-scale-factor=2 (devicePixelRatio 2, canvas backing scale 2).
 Headless Chrome has no real vsync and no GPU window; see S-142_RESULTS.md.
@@ -38,7 +38,7 @@ def run(args) -> dict:
     box: dict = {}
     sent: dict[str, int] = {}
     done = threading.Event()
-    snaps = WEB / "results_s142" / "snaps" / f"{args.name}"
+    snaps = WEB / "results_s148" / "snaps" / f"{args.name}"
     snaps.mkdir(parents=True, exist_ok=True)
 
     class H(http.server.SimpleHTTPRequestHandler):
@@ -86,7 +86,7 @@ def run(args) -> dict:
         query += f"&cases={args.cases}"
     if args.reps:
         query += f"&reps={args.reps}"
-    url = f"http://127.0.0.1:{srv.server_port}/harness/s142/run.html?{query}"
+    url = f"http://127.0.0.1:{srv.server_port}/{args.page}?{query}"
     prof = tempfile.mkdtemp(prefix="chrome_s142_", dir=SCRATCH)
     cmd = [CHROME, "--headless=new", f"--user-data-dir={prof}", *FLAGS]
     if args.dpr != 1:
@@ -106,7 +106,7 @@ def run(args) -> dict:
     res = box["data"]
     res["wall_s"] = time.perf_counter() - t0
     res["server_bytes"] = sent
-    out = WEB / "results_s142" / f"{args.name}.json"
+    out = WEB / "results_s148" / f"{args.name}.json"
     out.write_text(json.dumps(res, indent=1), encoding="utf-8")
     return res
 
@@ -121,6 +121,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-check", action="store_true")
     ap.add_argument("--name", default="")
     ap.add_argument("--timeout", type=int, default=1500)
+    ap.add_argument("--page", default="harness/s142/run.html")
     a = ap.parse_args()
     a.name = a.name or f"browser-{a.route}-{a.where}-{a.dpr}x"
     r = run(a)
