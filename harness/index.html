@@ -1,0 +1,100 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>S-135 harness</title>
+<body style="font:12px monospace">
+<p>Renders IR cases (cases/&lt;id&gt;/ir.json) with renderer/ir_canvas.js. Open with <code>?cases=a,b,c</code>
+(default: every case in cases/manifest.json). Results land in <code>#meta</code> (JSON) and one
+<code>&lt;img id="png-..."&gt;</code> per case (PNG data URL, composited over black like the Cairo capture).</p>
+<pre id="log"></pre>
+<div id="images"></div>
+<script id="meta" type="application/json">[]</script>
+<script type="module">
+import { IrCanvasRenderer, finalFrameSteps } from "../renderer/ir_canvas.js";
+
+const params = new URLSearchParams(location.search);
+const log = (s) => { document.getElementById("log").textContent += s + "\n"; };
+const WARM_RUNS = Number(params.get("warm") || 7);
+
+function runSteps(r, steps, overlay) {
+  for (const s of steps) {
+    if (s.k === "frame") r.drawFrame(s.ops);
+    else if (s.k === "begin") r.beginFrame();
+    else if (s.k === "batch") r.drawOps(s.ops);
+    else if (s.k === "end") r.endFrame();
+  }
+  if (r.open) r.endFrame();
+  if (overlay) r.drawFrame(overlay);
+}
+const median = (a) => a.slice().sort((x, y) => x - y)[Math.floor(a.length / 2)];
+const toDataUrl = (blob) => new Promise((res) => { const f = new FileReader(); f.onload = () => res(f.result); f.readAsDataURL(blob); });
+
+async function get(url, as = "buffer") {          // the localhost server drops the odd connection (mid-body): retry the whole read
+  for (let i = 0; ; i++) {
+    try { const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 8000);
+    try { const r = await fetch(url, { cache: "no-store", signal: ac.signal }); return as === "json" ? await r.json() : new Uint8Array(await r.arrayBuffer()); } finally { clearTimeout(to); } }
+    catch (e) { if (i >= 8) throw e; await new Promise((res) => setTimeout(res, 150)); }
+  }
+}
+
+async function inflate(u8) {
+  const stream = new Blob([u8]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function runCase(id) {
+  const base = `../cases/${id}/`;
+  const out = { case: id };
+  try {
+    const doc = await get(base + "ir.json", "json");
+    const blobs = new Map();
+    for (const f of doc.files) blobs.set(f, await inflate(await get(base + f)));
+    const W = Math.round(doc.width * doc.scale), H = Math.round(doc.height * doc.scale);
+    Object.assign(out, { width: W, height: H, scale: doc.scale, cairo_ms: doc.cairo_ms, ops: doc.final_frame_ops });
+    const canvas = new OffscreenCanvas(W, H);
+    const r = new IrCanvasRenderer(canvas, { width: doc.width, height: doc.height, scale: doc.scale, getBlob: (n) => blobs.get(n) });
+    const t0 = performance.now();
+    runSteps(r, doc.steps, doc.overlay);
+    canvas.getContext("2d").getImageData(0, 0, 1, 1);
+    out.ms_cold = performance.now() - t0;           // all steps of the case, first run (images decoded, JIT cold)
+    // composite over black = Cairo's BGRA premultiplied with alpha dropped
+    const flat = new OffscreenCanvas(W, H), fc = flat.getContext("2d");
+    fc.fillStyle = "#000"; fc.fillRect(0, 0, W, H); fc.drawImage(canvas, 0, 0);
+    out.png = await toDataUrl(await flat.convertToBlob({ type: "image/png" }));
+    // warm: the final frame only, repeated on the same renderer (images cached)
+    const steps = finalFrameSteps(doc), times = [];
+    for (let i = 0; i < WARM_RUNS; i++) {
+      const t = performance.now();
+      runSteps(r, steps, doc.overlay);
+      canvas.getContext("2d").getImageData(0, 0, 1, 1);
+      times.push(performance.now() - t);
+    }
+    out.ms_warm = median(times);
+    out.stats = r.stats;
+  } catch (e) {
+    out.error = String((e && e.stack) || e);
+  }
+  return out;
+}
+
+const ids = params.get("cases")
+  ? params.get("cases").split(",")
+  : (await (await fetch("../cases/manifest.json")).json()).filter((m) => !m.error).map((m) => m.case);
+const results = [];
+for (const id of ids) {
+  const res = await runCase(id);
+  results.push(res);
+  if (res.png) {
+    const img = new Image(); img.id = "png-" + id; img.src = res.png; img.width = res.width / res.scale;
+    document.getElementById("images").appendChild(img);
+  }
+  log(`${id}: ${res.error ? "ERROR " + res.error.split("\n")[0] : `cold ${res.ms_cold.toFixed(1)} ms, warm ${res.ms_warm.toFixed(2)} ms`}`);
+}
+const meta = document.getElementById("meta");
+meta.textContent = JSON.stringify(results.map((r) => ({ ...r, png: r.png ? "PNG:" + r.png.length : null })));
+// PNGs are carried in dedicated elements so the dump stays parseable
+for (const r of results) if (r.png) { const d = document.createElement("div"); d.className = "png"; d.dataset.case = r.case; d.dataset.url = r.png; document.body.appendChild(d); }
+document.title = "done";
+if (params.get("post")) {
+  await fetch("/result", { method: "POST", body: JSON.stringify(results) });
+}
+</script>
