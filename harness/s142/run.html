@@ -1,0 +1,249 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>S-142 browser bench</title>
+<body style="font:12px monospace;margin:8px">
+<p>S-142: Cairo-in-wasm vs Canvas 2D, same cases. <code>?route=cairo|canvas&amp;where=main|worker&amp;cases=a,b&amp;check=1&amp;post=1</code></p>
+<span id="status">loading</span>
+<div id="stage"></div>
+<pre id="log"></pre>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const ROUTE = q.get("route") || "cairo";               // cairo: real CairoRenderer in wasm; canvas: IR to Canvas 2D
+const WHERE = q.get("where") || "main";                // main: the page paints; worker: OffscreenCanvas in the worker
+const CHECK = q.get("check") === "1";                  // first a 30-frame pass whose last frame is compared with the golden
+const WARM = Number(q.get("warm") || 5), REPS = Number(q.get("reps") || 30);        // the cloud bench's counts
+const SWARM = 1, SREPS = Number(q.get("sreps") || 10);                              // scripts: whole run is the frame
+const SCALE = devicePixelRatio;                        // 1, or 2 when Chrome runs with --force-device-scale-factor=2
+const base = new URL("./", location.href).href;
+const $ = (id) => document.getElementById(id);
+const log = (s) => { $("log").textContent += s + "\n"; };
+const R = { route: ROUTE, where: WHERE, dpr: SCALE, ua: navigator.userAgent, warm: WARM, reps: REPS, cross_origin_isolated: self.crossOriginIsolated, cases: [] };
+
+const pct = (a, p) => { const s = a.slice().sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+const stat = (a) => { a = a.filter((x) => x !== undefined && x !== null && !Number.isNaN(x)); if (!a.length) return null;
+  return { n: a.length, median: pct(a, 0.5), p95: pct(a, 0.95), mean: a.reduce((x, y) => x + y, 0) / a.length, min: Math.min(...a), max: Math.max(...a) }; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const worker = new Worker("worker.js", { type: "module" });
+let waiter = null;                                      // one outstanding wait for a message type
+const inbox = [];
+worker.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === "error") { if (waiter) { const w = waiter; waiter = null; w.reject(new Error(m.message)); } else inbox.push(m); return; }
+  if (m.type === "frame") { onFrame(m, performance.now()); return; }
+  if (waiter && waiter.type === m.type) { const w = waiter; waiter = null; w.resolve(m); } else inbox.push(m);
+};
+worker.onerror = (e) => { R.fatal = String(e.message || e); finish(); };
+const wait = (type) => new Promise((resolve, reject) => {
+  const i = inbox.findIndex((m) => m.type === type || m.type === "error");
+  if (i >= 0) { const m = inbox.splice(i, 1)[0]; return m.type === "error" ? reject(new Error(m.message)) : resolve(m); }
+  waiter = { type, resolve, reject };
+});
+
+// ---- per-run state
+let el = null, ctx = null, renderer = null, size = null, frameWaiter = null;
+const posts = new Map();                                // seq -> performance.now() at post
+const recs = [];
+let snapResult = null;
+
+function newCanvas() {
+  $("stage").textContent = "";
+  el = document.createElement("canvas");
+  el.id = "c"; el.style.border = "1px solid #888"; el.style.display = "block";
+  $("stage").appendChild(el);
+  ctx = null; renderer = null;
+}
+function sizeCanvasCss(w, h) { el.style.width = w + "px"; el.style.height = h + "px"; }
+function sizeMain(w, h, scale) {
+  el.width = Math.round(w * scale); el.height = Math.round(h * scale); sizeCanvasCss(w, h);
+  if (ROUTE === "cairo") ctx = el.getContext("2d");
+  else renderer = new IrCanvasRenderer(el, { width: w, height: h, scale, getBlob: () => null });
+}
+
+let IrCanvasRenderer = null;
+if (ROUTE === "canvas") ({ IrCanvasRenderer } = await import("../../renderer/ir_canvas.js"));
+
+// ---- a frame arrives from the worker: page-side work, then bookkeeping
+function onFrame(m, tRecv) {
+  const rec = { seq: m.seq, py: m.py, nOps: m.nOps, wcopy: m.wcopyMs, tPost: posts.get(m.seq), tRecv, running: m.running };
+  rec.toWorker = rec.tPost === undefined ? undefined : m.tIn - (performance.timeOrigin + rec.tPost);
+  if (WHERE === "main" && m.size && !renderer && !ctx) sizeMain(m.size[0], m.size[1], m.size[2]);      // scripts: size known now
+  rec.transfer = performance.timeOrigin + tRecv - m.tSent;                       // message (worker's last act to page's receipt)
+  if (WHERE === "main") {
+    if (ROUTE === "cairo") {
+      const t = performance.now();
+      const img = new ImageData(new Uint8ClampedArray(m.pixels), m.w, m.h);
+      ctx.putImageData(img, 0, 0);
+      rec.paint = performance.now() - t;
+    } else {
+      let t = performance.now();
+      const ops = JSON.parse(m.ops);
+      rec.parse = performance.now() - t; t = performance.now();
+      renderer.drawFrame(ops);
+      rec.paint = performance.now() - t;
+    }
+    if (m.snap) snapResult = { w: el.width, h: el.height, buf: ctx ? ctx.getImageData(0, 0, el.width, el.height).data.buffer : el.getContext("2d").getImageData(0, 0, el.width, el.height).data.buffer };
+  } else {
+    rec.parse = m.parseMs; rec.paint = m.paintMs;
+    if (m.snap) snapResult = { w: Math.round(size[0] * SCALE), h: Math.round(size[1] * SCALE), buf: m.snapBuf };
+  }
+  rec.tDone = performance.now();
+  if (R.first_frame_ms === undefined) R.first_frame_ms = rec.tDone;
+  rec.e2e = rec.tDone - rec.tPost;
+  rec.size = m.size;
+  recs.push(rec);
+  if (frameWaiter) { const f = frameWaiter; frameWaiter = null; f(rec); }
+}
+const nextFrame = () => new Promise((r) => { frameWaiter = r; });
+
+// ---- loop sketches, driven by requestAnimationFrame
+async function runLoop(frames, snapAt) {
+  recs.length = 0; posts.clear(); snapResult = null;
+  let seq = 0, inflight = false, done = false;
+  const skipped = [], rafTimes = [];
+  const finished = new Promise((resolve) => {
+    const onDone = (rec) => {
+      inflight = false;
+      if (!rec.running || recs.length >= frames) { done = true; resolve(); } else frameWaiter = onDone;
+    };
+    frameWaiter = onDone;
+  });
+  const tick = (ts) => {
+    if (done) return;
+    rafTimes.push(ts);
+    if (!inflight && seq < frames) {
+      seq++; inflight = true;
+      posts.set(seq, performance.now());
+      worker.postMessage({ type: "step", t: ts, events: "[]", seq, maxEventSeq: 0, snap: seq === snapAt });
+    } else if (inflight) skipped.push(seq);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  await finished;
+  const timed = recs.filter((r) => r.seq > WARM);
+  const out = { frames: recs.length, ended_early: recs.length < frames };
+  if (timed.length) {
+    const t1 = timed[0].tPost, t2 = timed[timed.length - 1].tDone;
+    out.fps = timed.length / ((t2 - t1) / 1000);
+    out.timed_window_ms = t2 - t1;
+    out.skipped_ticks = skipped.filter((s) => s >= WARM).length;
+    const intervals = rafTimes.slice(1).map((t, i) => t - rafTimes[i]);
+    out.raf_interval_ms = stat(intervals);
+  }
+  out.phases = phasesOf(timed);
+  return out;
+}
+
+function phasesOf(rs) {
+  const g = (f) => stat(rs.map(f));
+  return {
+    draw_py: g((r) => r.py.draw), render_cairo: g((r) => r.py.render), py_other: g((r) => r.py.other), step_py: g((r) => r.py.step),
+    encode: g((r) => r.py.encode), wasm_copy: g((r) => r.wcopy), to_worker: g((r) => r.toWorker),
+    transfer: g((r) => r.transfer), parse: g((r) => r.parse), paint: g((r) => r.paint), e2e: g((r) => r.e2e), ops: g((r) => r.nOps),
+  };
+}
+
+// ---- scripts: the whole run is the frame
+async function runScript(scale) {
+  recs.length = 0; posts.clear(); snapResult = null;
+  for (let i = 1; i <= SWARM + SREPS; i++) {
+    posts.set(i, performance.now());
+    const p = nextFrame();
+    worker.postMessage({ type: "script", scale, seq: i, prepare: i === 1, snap: false });
+    const rec = await p;
+    if (i === 1) {                                       // size is known after the first run
+      const s = rec.size;
+      if (WHERE === "worker") sizeCanvasCss(s[0], s[1]);
+      size = s;
+    }
+    await sleep(30);
+  }
+  const timed = recs.filter((r) => r.seq > SWARM);
+  return { frames: recs.length, phases: phasesOf(timed) };
+}
+
+// ---- one case
+async function loadCase(c, scale) {
+  newCanvas();
+  const msg = { type: "case", id: c.id, kind: c.kind, scale, pygame: c.pygame, ink: c.ink };
+  let transfer = [];
+  if (WHERE === "worker") { msg.canvas = el.transferControlToOffscreen(); transfer = [msg.canvas]; }
+  const w = wait("loaded");
+  worker.postMessage(msg, transfer);
+  const m = await w;
+  if (c.kind === "loop") {
+    size = m.size;
+    if (WHERE === "main") sizeMain(size[0], size[1], size[2]);
+    else { sizeCanvasCss(size[0], size[1]); const p = wait("prepared"); worker.postMessage({ type: "prepare", w: size[0], h: size[1], scale: size[2] }); await p; }
+  }
+  return m;
+}
+
+async function upload(name, snap) {
+  await fetch(`/snap?name=${encodeURIComponent(name)}&w=${snap.w}&h=${snap.h}`, { method: "POST", body: snap.buf });
+}
+
+async function runCase(c) {
+  const out = { id: c.id, kind: c.kind, group: c.group, scale: SCALE };
+  try {
+    if (CHECK && SCALE === 1 && c.kind === "loop" && c.golden) {
+      const lm = await loadCase(c, 1);
+      out.load_ms = lm.ms; out.load_extra = lm.extra;
+      const r = await runLoop(30, 30);
+      if (snapResult) { await upload(`${ROUTE}-${WHERE}-${c.id}`, snapResult); out.snap = `${ROUTE}-${WHERE}-${c.id}`; }
+    }
+    if (CHECK && SCALE === 1 && c.kind === "script" && c.golden) {
+      const lm = await loadCase(c, 1);
+      out.load_ms = lm.ms; out.load_extra = lm.extra;
+      await runScript(1);
+      // snapshot of the canvas after a script run
+      if (WHERE === "main") {
+        snapResult = { w: el.width, h: el.height, buf: (ctx || el.getContext("2d")).getImageData(0, 0, el.width, el.height).data.buffer };
+        await upload(`${ROUTE}-${WHERE}-${c.id}`, snapResult); out.snap = `${ROUTE}-${WHERE}-${c.id}`;
+      } else {
+        // worker canvas: ask for a snapshot with one more run
+        recs.length = 0; posts.set(99, performance.now());
+        const p = nextFrame(); worker.postMessage({ type: "script", scale: 1, seq: 99, snap: true }); await p;
+        if (snapResult) { await upload(`${ROUTE}-${WHERE}-${c.id}`, snapResult); out.snap = `${ROUTE}-${WHERE}-${c.id}`; }
+      }
+    }
+    const lm = await loadCase(c, SCALE);
+    out.load_ms = lm.ms; out.load_extra = Object.assign(out.load_extra || {}, lm.extra);
+    const r = c.kind === "loop" ? await runLoop(WARM + REPS, 0) : await runScript(SCALE);
+    Object.assign(out, r, { canvas: size && size.slice(0, 3), canvas_px: [el.width, el.height] });
+  } catch (err) {
+    out.error = String((err && err.message) || err);
+  }
+  return out;
+}
+
+let finished = false;
+async function finish() {
+  if (finished) return;
+  finished = true;
+  R.page_resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, transfer: e.transferSize, encoded: e.encodedBodySize, decoded: e.decodedBodySize }));
+  document.title = "done"; $("status").textContent = "done";
+  log(JSON.stringify(R).slice(0, 2000));
+  if (q.get("post")) await fetch("/result", { method: "POST", body: JSON.stringify(R) });
+  worker.terminate();
+}
+
+(async () => {
+  const cases = await (await fetch("dist/cases.json")).json();
+  const want = (q.get("cases") || "").split(",").filter(Boolean);
+  const list = want.length ? cases.filter((c) => want.includes(c.id)) : cases;
+  const bw = wait("booted");
+  worker.postMessage({ type: "boot", route: ROUTE, where: WHERE, base });
+  try {
+    const b = await bw;
+    R.boot = b.phases; R.boot_resources = b.resources; R.boot_done_ms = performance.now();
+  } catch (err) { R.fatal = String(err.message || err); await finish(); return; }
+  $("status").textContent = "running";
+  for (const c of list) {
+    $("status").textContent = "running " + c.id;
+    R.cases.push(await runCase(c));
+    await sleep(100);
+  }
+  await finish();
+})();
+</script>
