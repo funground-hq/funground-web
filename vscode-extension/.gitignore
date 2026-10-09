@@ -1,0 +1,7 @@
+media/runner/
+*.vsix
+test/out/
+node_modules/
+.vscode-test-web/
+test/node_modules/
+test/package-lock.json

@@ -1,0 +1,40 @@
+{
+  "name": "funground",
+  "displayName": "funground",
+  "description": "Run a funground sketch beside the editor, in github.dev, vscode.dev and VS Code.",
+  "version": "0.0.1",
+  "publisher": "funground-hq",
+  "license": "MIT",
+  "private": true,
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Education", "Visualization"],
+  "browser": "./extension.js",
+  "activationEvents": ["onLanguage:python"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": true, "description": "Sketches run only in the preview panel's own sandboxed origin, never with the editor's rights." },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "commands": [
+      { "command": "funground.run", "title": "Run", "category": "funground", "icon": "$(play)" },
+      { "command": "funground.stop", "title": "Stop", "category": "funground", "icon": "$(debug-stop)" }
+    ],
+    "menus": {
+      "editor/title": [
+        { "command": "funground.run", "when": "editorLangId == python", "group": "navigation" }
+      ]
+    },
+    "keybindings": [
+      { "command": "funground.run", "key": "ctrl+enter", "mac": "cmd+enter", "when": "editorTextFocus && editorLangId == python" }
+    ],
+    "configuration": {
+      "title": "funground",
+      "properties": {
+        "funground.autoRun": { "type": "boolean", "default": true, "description": "Run the sketch again a moment after you stop typing (and whenever you save)." },
+        "funground.autoRunDelay": { "type": "number", "default": 400, "minimum": 100, "description": "Milliseconds to wait after the last change before running again." },
+        "funground.runtimeUrl": { "type": "string", "default": "", "description": "Where Python and funground load from: empty for the copy inside the extension, or a site's folder (https://.../) holding pyodide/ and runtime/, served with CORS." },
+        "funground.randomSeed": { "type": ["number", "null"], "default": null, "description": "Seed the random numbers before each run, so every run draws the same (as funground's tests do). Empty: different each run." }
+      }
+    }
+  }
+}
