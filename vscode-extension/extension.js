@@ -31,16 +31,16 @@ function activate(context) {
     vscode.commands.registerCommand("funground.run", () => runActive(context)),
     vscode.commands.registerCommand("funground.stop", () => panel?.webview.postMessage({ type: "stop" })),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
-      if (panel && editor && isSketch(editor.document) && editor.document !== current) {
+      if (panel && editor && isRunnable(editor.document) && editor.document !== current) {
         current = editor.document;
         schedule(0, "editor");
       }
     }),
     vscode.workspace.onDidChangeTextDocument((e) => {
-      if (panel && e.document === current && e.contentChanges.length && setting("autoRun")) schedule(setting("autoRunDelay"), "edit");
+      if (panel && feedsRun(e.document) && e.contentChanges.length && setting("autoRun")) schedule(setting("autoRunDelay"), "edit");
     }),
     vscode.workspace.onDidSaveTextDocument((document) => {
-      if (panel && document === current) schedule(0, "save");
+      if (panel && feedsRun(document)) schedule(0, "save");
     }),
   );
 }
@@ -49,6 +49,21 @@ function deactivate() {}
 
 const setting = (name) => vscode.workspace.getConfiguration("funground").get(name);
 const isSketch = (document) => document.languageId === "python";
+
+// The panel follows the active editor only to a sketch it can run: a file with a top-level run() or show() call
+// (`f.run()` for a sketch that animates, `f.show()` for a script that draws once). A helper such as palette.py has
+// neither, so opening it to change a colour leaves the sketch that uses it in the panel. The Run command (Ctrl+Enter)
+// still runs whatever Python file is open, for a script that only saves a file.
+const RUNNABLE = /^(?:[A-Za-z_]\w*\.)?(?:run|show)\s*\(/m;
+const isRunnable = (document) => isSketch(document) && RUNNABLE.test(document.getText());
+
+// A change to the sketch in the panel, or to a .py file beside it (a helper it may import), runs the sketch again.
+function feedsRun(document) {
+  if (!current) return false;
+  if (document === current) return true;
+  const folder = (uri) => uri.path.slice(0, uri.path.lastIndexOf("/"));
+  return isSketch(document) && document.uri.scheme === current.uri.scheme && folder(document.uri) === folder(current.uri);
+}
 
 function runActive(context) {
   const editor = vscode.window.activeTextEditor;
