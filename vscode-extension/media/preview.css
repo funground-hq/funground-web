@@ -1,0 +1,9 @@
+body { margin: 0; padding: 0; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); display: flex; flex-direction: column; height: 100vh; }
+#bar { display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+#bar button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 3px 10px; cursor: pointer; }
+#bar button:hover { background: var(--vscode-button-hoverBackground); }
+#status { opacity: 0.8; margin-left: 6px; }
+#stage { flex: 1 1 auto; overflow: auto; padding: 8px; }
+#canvas { display: block; outline: none; }
+#output { flex: 0 0 auto; max-height: 30vh; overflow: auto; margin: 0; padding: 6px 8px; border-top: 1px solid var(--vscode-panel-border); font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); white-space: pre-wrap; }
+#output .stderr { color: var(--vscode-errorForeground); }
