@@ -9,6 +9,8 @@ touched. By default the profile is new and deleted afterwards (a cold start); --
 run with the same DIR measures a warm start.
 
 Pixel check: the runner's frame (1x) must equal the golden of tests/golden byte for byte. Pillow reads the PNGs.
+At another scale (--dpr 1.25) there is no golden: the check is that the frame is the golden's size times the scale
+(to within a pixel) and not blank.
 """
 from __future__ import annotations
 
@@ -118,6 +120,15 @@ def pixel_check(case: dict, snaps: Path) -> dict:
     return {"id": case["id"], "identical": a == g, "differing_pixels": differing, "size": list(actual.size)}
 
 
+def scale_check(case: dict, snaps: Path, dpr: float) -> dict:
+    """At a scale other than 1: the frame has the golden's size times `dpr` (within a pixel) and has more than one colour."""
+    actual, golden = Image.open(snaps / f"{case['id']}.png"), Image.open(case["golden"])
+    expected = [golden.size[0] * dpr, golden.size[1] * dpr]
+    close = all(abs(a - e) <= 1 for a, e in zip(actual.size, expected))
+    colours = len(actual.convert("RGB").getcolors(maxcolors=1 << 24) or [])
+    return {"id": case["id"], "size": list(actual.size), "expected_size": expected, "size_ok": close, "colours": colours, "blank": colours <= 1}
+
+
 BATCH = 3            # cases per Chrome start: a long chain of worker boots in one page stalled on this machine (see the README)
 
 
@@ -150,7 +161,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--funground", required=True, type=Path)
     parser.add_argument("--profile", type=Path, help="keep and reuse this Chrome profile (a second run is a warm start)")
-    parser.add_argument("--dpr", type=int, default=1, help="device scale factor (the pixel check is for 1)")
+    parser.add_argument("--dpr", type=float, default=1, help="device scale factor (the byte-for-byte pixel check is for 1)")
     parser.add_argument("--timeout", type=int, default=240, help="seconds per Chrome start")
     parser.add_argument("--no-prewarm", action="store_true", help="the runner starts a worker only when a run needs it")
     parser.add_argument("--limit", type=int, help="run only the first N cases (for debugging)")
@@ -179,12 +190,15 @@ def main() -> int:
             continue
         report["cases"] += result.get("cases", [])
         report["scenarios"].update(result.get("scenarios", {}))
-        report["batches"].append({k: result.get(k) for k in ("first_load_ms", "fatal")})
+        report["batches"].append({k: result.get(k) for k in ("first_load_ms", "first_frame_ms", "fatal")})
         report.setdefault("ready", result.get("ready"))
     report["wall_s"] = round(time.perf_counter() - started, 1)
     report["server_bytes"] = sent
+    taken = [c for c in cases if (snaps / f"{c['id']}.png").exists()]
     if args.dpr == 1:
-        report["pixels"] = [pixel_check(c, snaps) for c in cases if (snaps / f"{c['id']}.png").exists()]
+        report["pixels"] = [pixel_check(c, snaps) for c in taken]
+    else:
+        report["scaled"] = [scale_check(c, snaps, args.dpr) for c in taken]
     (out / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     summary = {k: v for k, v in report.items() if k not in ("server_bytes", "ready", "cases")}
     summary["cases"] = [{k: c.get(k) for k in ("id", "start_ms", "frame_ms", "error")} for c in report["cases"]]
