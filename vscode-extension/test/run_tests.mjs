@@ -192,19 +192,20 @@ try {
     return page.evaluate(() => [...document.querySelectorAll(".markers-panel .monaco-list-row")].map((row) => row.textContent));
   };
 
-  // uses_helper.py imports helpers.py. Open helpers.py, change its value without saving, come back: the run must use it.
+  // uses_helper.py imports helpers.py. Open helpers.py and change its value without saving: the panel stays on
+  // uses_helper.py (a helper is not a runnable sketch) and runs it again with the new value.
   const helperEdit = async (frame) => {
     const printed = (run) => run.output.map(([, text]) => text).find((text) => text.startsWith("helper value")) ?? null;
     const first = printed((await state(frame)).runs.at(-1));
+    const before = (await state(frame)).runs.length;
     await openFile("helpers.py");
     await page.keyboard.press("Control+A");
     await page.keyboard.type("VALUE = 2");
-    await sleep(800);
     const typed = await page.evaluate(() => document.querySelector(".monaco-editor .view-lines")?.textContent);
-    const before = (await state(frame)).runs.length;
-    await openFile("uses_helper.py");
-    const s = await waitFor(frame, (x) => x.runs.length > before && x.runs.at(-1).filename === "uses_helper.py" && x.runs.at(-1).frames >= 3, "uses_helper.py again");
-    return { helperBefore: first, helperEditor: typed, helperAfter: printed(s.runs.at(-1)), helperRuns: s.runs.slice(-5).map((r) => [r.filename, r.why, r.frames, r.output]) };
+    const s = await waitFor(frame, (x) => x.runs.slice(before).some((r) => printed(r) === "helper value 2" && r.frames >= 3), "uses_helper.py with the edited helper");
+    const since = s.runs.slice(before);
+    return { helperBefore: first, helperEditor: typed, helperAfter: printed(since.at(-1)),
+             panelStayed: since.every((r) => r.filename === "uses_helper.py"), helperRuns: since.map((r) => [r.filename, r.why, r.frames, r.output]) };
   };
 
   // 1. first load: open a sketch, run the command, wait for Python and the first frame.
