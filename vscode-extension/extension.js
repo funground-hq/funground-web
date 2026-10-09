@@ -1,23 +1,25 @@
-// The funground extension for VS Code for the web (github.dev, vscode.dev) and the desktop (story S-156, spike).
+// The funground extension for VS Code for the web (github.dev, vscode.dev) and the desktop (story S-158).
 //
 // "funground: Run" opens a preview panel beside the editor and runs the active Python file in it with the funground
 // browser runner (../runner, copied into media/runner by build.py). The panel follows the active Python editor, runs the
 // sketch again a moment after typing stops and at once on save, and shows print() and errors; an error's line is also
-// marked in the editor. Files in the data/ folder beside the sketch are read through vscode.workspace.fs and handed to
-// the run, so f.load_image("data/photo.png") works in github.dev, where the files are the repository's.
+// marked in the editor. What the sketch reads from beside it is read through vscode.workspace.fs and handed to the run:
+// the files in the data/ folder (f.load_image("data/photo.png")) and the other .py files in its folder (import helpers).
+// In github.dev the files are the repository's.
 //
-// Safety: the sketch runs only inside the webview, which has its own origin and a strict Content Security Policy; this
-// file never runs sketch code. A "browser" entry point: no Node APIs.
+// Safety: the sketch runs only inside the webview, which has its own origin and a strict Content Security Policy (one
+// exception, D-080, at previewHtml); this file never runs sketch code. A "browser" entry point: no Node APIs.
 
 const vscode = require("vscode");
 
-const DATA_LIMIT = 32 * 1024 * 1024;            // bytes of data/ files sent with a run; more is refused with a message
+const RUNTIME_SITE = "https://funground-hq.github.io/runtime/";   // D-081: the runtime lives in a folder per version, below this
+const DATA_LIMIT = 32 * 1024 * 1024;            // bytes of data/ and helper files sent with a run; more is refused with a message
 
 let panel = null;                               // the one preview panel
 let ready = false;                              // the webview's runner has loaded Python
 let current = null;                             // the document the preview shows
 let timer = null;
-let sent = null;                                // what the last run was made from: {uri, version}, to skip a repeat
+let sent = null;                                // what the last run was made from: {document, version, helpers}, to skip a repeat
 let diagnostics;
 let output;
 
@@ -61,17 +63,19 @@ function runActive(context) {
   schedule(0, "command");
 }
 
-function openPanel(context) {
-  panel = vscode.window.createWebviewPanel("funground.preview", "funground", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, {
+async function openPanel(context) {
+  const created = vscode.window.createWebviewPanel("funground.preview", "funground", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, {
     enableScripts: true,
     retainContextWhenHidden: true,             // keeps Python loaded while the panel is behind another tab
     localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
   });
+  panel = created;
   ready = false;
-  panel.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.svg");
-  panel.webview.html = previewHtml(panel.webview, context.extensionUri);
-  panel.webview.onDidReceiveMessage(received);
-  panel.onDidDispose(() => { panel = null; ready = false; sent = null; diagnostics.clear(); });
+  created.iconPath = vscode.Uri.joinPath(context.extensionUri, "media", "icon.svg");
+  created.onDidDispose(() => { if (panel === created) { panel = null; ready = false; sent = null; diagnostics.clear(); } });
+  created.webview.onDidReceiveMessage(received);
+  const html = previewHtml(created.webview, context.extensionUri, await runtimeSite(context));
+  if (panel === created) created.webview.html = html;        // not if the panel was closed while we looked for the runtime
 }
 
 // Run the current sketch after `delay` ms, unless asked again before then. `why` is "command", "save", "edit", "editor"
@@ -84,21 +88,37 @@ function schedule(delay, why) {
 async function sendRun(why) {
   if (!panel || !ready || !current) return;
   const document = current;
-  const same = sent && sent.uri === document.uri.toString() && sent.version === document.version;
+  const budget = makeBudget();
+  const helpers = await helperSources(document.uri, budget).catch(reportUnsent);
+  const same = sent && sent.document === document && sent.version === document.version && sameTexts(sent.helpers, helpers);
   if (same && (why === "edit" || why === "editor")) return;
-  sent = { uri: document.uri.toString(), version: document.version };
+  sent = { document, version: document.version, helpers };
   diagnostics.delete(document.uri);
-  const filename = document.uri.path.split("/").pop();
-  const files = await dataFiles(document.uri);
+  const filename = fileName(document);
+  const files = { ...(await dataFiles(document.uri, budget).catch(reportUnsent)), ...encodeTexts(helpers) };
   panel.title = `funground: ${filename}`;
   panel.webview.postMessage({ type: "run", source: document.getText(), filename, files, seed: setting("randomSeed") ?? undefined, why, at: Date.now() });
 }
 
-// Every file under data/ beside the sketch, as {"data/photo.png": Uint8Array}. github.dev reads them from the repository.
-async function dataFiles(sketchUri) {
-  const folder = vscode.Uri.joinPath(sketchUri, "..", "data");
-  const files = {};
+const fileName = (document) => document.uri.path.split("/").pop();
+
+function reportUnsent(error) {
+  output.appendLine(`files beside the sketch not sent: ${error.message}`);
+  return {};
+}
+
+// A count of the bytes read for one run, shared by the data and the helper files.
+function makeBudget() {
   let total = 0;
+  return (bytes) => {
+    total += bytes;
+    if (total > DATA_LIMIT) throw new Error(`the files beside the sketch hold more than ${DATA_LIMIT >> 20} MB`);
+  };
+}
+
+// Every file under data/ beside the sketch, as {"data/photo.png": Uint8Array}. github.dev reads them from the repository.
+async function dataFiles(sketchUri, budget) {
+  const files = {};
   async function walk(uri, prefix) {
     let entries;
     try { entries = await vscode.workspace.fs.readDirectory(uri); } catch { return; }      // no data folder
@@ -107,19 +127,41 @@ async function dataFiles(sketchUri) {
       if (type & vscode.FileType.Directory) await walk(child, `${prefix}${name}/`);
       else if (type & vscode.FileType.File) {
         const bytes = await vscode.workspace.fs.readFile(child);
-        total += bytes.byteLength;
-        if (total > DATA_LIMIT) throw new Error(`the data folder holds more than ${DATA_LIMIT >> 20} MB`);
+        budget(bytes.byteLength);
         files[`${prefix}${name}`] = bytes;
       }
     }
   }
-  try {
-    await walk(folder, "data/");
-  } catch (error) {
-    output.appendLine(`data/ not sent: ${error.message}`);
-    return {};
-  }
+  await walk(vscode.Uri.joinPath(sketchUri, "..", "data"), "data/");
   return files;
+}
+
+// The other .py files in the sketch's folder (not its subfolders), as {"helpers.py": "text"}, so that `import helpers` works.
+// A file that is open in an editor is sent as the editor has it, saved or not.
+async function helperSources(sketchUri, budget) {
+  const folder = vscode.Uri.joinPath(sketchUri, "..");
+  const sources = {};
+  for (const [name, type] of await vscode.workspace.fs.readDirectory(folder)) {
+    const uri = vscode.Uri.joinPath(folder, name);
+    if (!(type & vscode.FileType.File) || !name.endsWith(".py") || uri.toString() === sketchUri.toString()) continue;
+    sources[name] = await readText(uri);
+    budget(sources[name].length);
+  }
+  return sources;
+}
+
+async function readText(uri) {
+  const open = vscode.workspace.textDocuments.find((document) => document.uri.toString() === uri.toString());
+  return open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+}
+
+function encodeTexts(texts) {
+  return Object.fromEntries(Object.entries(texts).map(([name, text]) => [name, new TextEncoder().encode(text)]));
+}
+
+function sameTexts(a, b) {
+  const names = Object.keys(a);
+  return names.length === Object.keys(b).length && names.every((name) => a[name] === b[name]);
 }
 
 function received(message) {
@@ -142,30 +184,57 @@ function received(message) {
   }
 }
 
-// An error's traceback names the sketch and a line: mark that line in the editor.
+// An error's traceback names the sketch and a line: mark that line in the document the run was made from, which is not
+// always the one now showing (the learner may have moved to another file while the run was starting).
 function markError(text) {
-  if (!current) return;
-  const filename = current.uri.path.split("/").pop();
+  if (!sent) return;
+  const document = sent.document;
+  const filename = fileName(document);
   const lines = [...text.matchAll(/File "([^"]+)", line (\d+)/g)].filter((m) => m[1] === filename);
   if (!lines.length) return;
   const line = Math.max(0, Number(lines[lines.length - 1][2]) - 1);
   const last = text.trim().split("\n").pop();
-  const range = current.lineAt(Math.min(line, current.lineCount - 1)).range;
-  diagnostics.set(current.uri, [new vscode.Diagnostic(range, last, vscode.DiagnosticSeverity.Error)]);
+  const range = document.lineAt(Math.min(line, document.lineCount - 1)).range;
+  diagnostics.set(document.uri, [new vscode.Diagnostic(range, last, vscode.DiagnosticSeverity.Error)]);
 }
 
-function previewHtml(webview, extensionUri) {
+// Where Python and funground load from, in this order (D-081):
+//   1. the funground.runtimeUrl setting, when it is not empty;
+//   2. the copy inside the extension, when it has one (a build made with `build.py --runtime bundled`): returns null;
+//   3. the website's folder for the runtime version this extension was made for (package.json, "fungroundRuntime").
+// A site is returned as a URL that ends in "/" and holds pyodide/ and runtime/.
+async function runtimeSite(context) {
+  const chosen = setting("runtimeUrl").trim();
+  if (chosen) return new URL(chosen.endsWith("/") ? chosen : chosen + "/");
+  if (await hasBundledRuntime(context)) return null;
+  return new URL(`${context.extension.packageJSON.fungroundRuntime}/`, RUNTIME_SITE);
+}
+
+// Does the extension hold the runtime? The manifest is read, not just looked for: in VS Code for the web, workspace.fs.stat
+// answers "yes" for any path under an extension's own (http) location, found by the tests when the runtime was missing.
+async function hasBundledRuntime(context) {
+  const manifest = vscode.Uri.joinPath(context.extensionUri, "media", "runner", "runtime", "manifest.json");
+  try {
+    JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(manifest)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function previewHtml(webview, extensionUri, site) {
   const media = (...path) => webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", ...path));
-  const runtimeSite = setting("runtimeUrl").trim();
-  const site = runtimeSite ? new URL(runtimeSite.endsWith("/") ? runtimeSite : runtimeSite + "/") : null;
   const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
   const sources = [webview.cspSource, site?.origin].filter(Boolean).join(" ");
   // What the panel may do. Scripts: this page's one inline module (by nonce), the runner and Python from the extension (or
-  // the runtime site); WebAssembly compiled from bytes ('wasm-unsafe-eval', not 'unsafe-eval'). Workers only from blob:
-  // (the runner starts its worker from one). Network: the extension's files and the runtime site, nothing else.
+  // the runtime site); WebAssembly compiled from bytes ('wasm-unsafe-eval'). Workers only from blob: (the runner starts
+  // its worker from one). Network: the extension's files and the runtime site, nothing else.
+  // 'unsafe-eval' is D-080's one exception, in this panel only: pygame-ce's WebAssembly side modules are linked with eval(),
+  // and funground draws pictures with pygame-ce (f.load_image). The panel already runs the learner's own Python, in its own
+  // origin, with no network but ours.
   const csp = [
     "default-src 'none'",
-    `script-src 'nonce-${nonce}' ${sources} 'wasm-unsafe-eval'`,
+    `script-src 'nonce-${nonce}' ${sources} 'wasm-unsafe-eval' 'unsafe-eval'`,
     "worker-src blob:",
     `connect-src ${sources}`,
     `style-src ${webview.cspSource}`,

@@ -2,7 +2,7 @@
   "name": "funground-extension-tests",
   "private": true,
   "type": "module",
-  "description": "Headless tests of the funground VS Code web extension (spike S-156): VS Code for the web from @vscode/test-web, driven by Playwright.",
+  "description": "Headless tests of the funground VS Code web extension (story S-158): VS Code for the web from @vscode/test-web, driven by Playwright in the installed Chrome.",
   "devDependencies": {
     "@vscode/test-web": "0.0.81",
     "playwright-core": "1.64.0"

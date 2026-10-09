@@ -5,12 +5,13 @@
 //
 //   page -> worker
 //     init   {runtimeUrl?, pyodideUrl?}     load Pyodide and install everything; answers `ready`
-//     run    {source, filename, width, height, scale, files, seed?}   start the file; answers `started`
+//     run    {source, filename, width, height, scale, files, seed?}   start the file; answers `started`. `files` maps a path
+//                                           to bytes: data beside the sketch, and other .py files it may import
 //     step   {now}                          one display frame, `now` in seconds; answers `stepped`
 //     event  {kind, x, y, button, key, keyCode, delta}   one input event (funground's InputEvent vocabulary)
 //     microphone {samples}                  a Float32Array of mono samples (-1 to 1, 44 100 Hz) the microphone heard
 //     stop                                  end the run (the sketch's finish() runs), so the worker can run another file;
-//                                           answers `stopped`. Used by runner.js's `reuse` option (spike S-156)
+//                                           answers `stopped`. Used by runner.js's `reuse` option (D-083)
 //
 //   worker -> page
 //     ready    {versions, timings, resources}   everything is installed and checked
@@ -115,10 +116,31 @@ await micropip.install(funground_wheel, deps=False)
   post({ type: "ready", versions, timings, resources });
 }
 
-// Python side of the worker: two small functions, kept here so that this file is the whole worker.
+// Python side of the worker: a few small functions, kept here so that this file is the whole worker.
 const PYTHON_GLUE = `
 import importlib
+import os
+import shutil
+import sys
+import tempfile
 from array import array
+
+sys.dont_write_bytecode = True          # a helper edited and run again is always read from its source
+run_folder = None
+
+def enter_run_folder():
+    """A new folder for this run's files: the working folder, and first on the import path, where "python sketch.py"
+    puts the sketch's own folder. The last run's folder is deleted and leaves the path: a reused worker re-runs on every
+    pause in typing, and its files (data/ pictures and sounds) live in memory."""
+    global run_folder
+    if run_folder is not None:
+        if run_folder in sys.path:
+            sys.path.remove(run_folder)
+        os.chdir(tempfile.gettempdir())
+        shutil.rmtree(run_folder, ignore_errors=True)
+    run_folder = tempfile.mkdtemp()
+    os.chdir(run_folder)
+    sys.path.insert(0, run_folder)
 
 def push_microphone(session, chunk):
     """Hand a Float32Array from the page to the session as an array of floats (to_bytes copies it once)."""
@@ -145,17 +167,17 @@ def check_real_libraries():
 // ---- a run
 
 async function run({ source, filename, width, height, scale, files, seed }) {
-  py.runPython("import os, tempfile; os.chdir(tempfile.mkdtemp())");       // a folder of its own for what the file saves
-  for (const [name, bytes] of Object.entries(files ?? {})) {               // data the file reads, beside it ("data/photo.jpg")
+  py.globals.get("enter_run_folder")();                                    // a folder of its own: the file's files, saves and imports
+  for (const [name, bytes] of Object.entries(files ?? {})) {               // beside the sketch: "data/photo.jpg", "helpers.py"
     const folder = name.split("/").slice(0, -1).join("/");
     if (folder) py.FS.mkdirTree(folder);
     py.FS.writeFile(name, new Uint8Array(bytes));
   }
   await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
-  if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // a repeatable run (tests compare with goldens)
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
   session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest);
+  if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // the Session's own sketch: a repeatable run (goldens)
   try {
     session.start(source, filename);
   } catch (error) {

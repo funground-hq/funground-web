@@ -1,31 +1,35 @@
-// Headless test of the funground VS Code web extension (spike S-156).
+// Headless test of the funground VS Code web extension (story S-158).
 //
-//   node run_tests.mjs --vscode sources:<VS Code checkout, compiled> | static:<VS Code web build folder>
-//                      [--runtime bundled | site:<folder made by build.py --site>] [--label NAME] [--chromium PATH]
+//   node run_tests.mjs [--runtime bundled | site:<folder made by build.py --site> | published:<the same>] [--label NAME] [--chromium PATH]
+//                      [--vscode sources:<VS Code checkout, compiled>] [--port N] [--host NAME]
 //
-// Starts VS Code for the web with @vscode/test-web (no browser of its own), with this extension in development mode and a
-// copy of sketchbook/ as the workspace, then drives headless Chromium with Playwright as a learner would: open a sketch
-// (a click in the Explorer), run "funground: Run" (F1), type, save. It reads what the preview panel did from its page
-// (window.fungroundPreview, media/preview.js) and writes out/<label>/report.json and the frames as raw RGBA, which
-// compare.py checks against funground's goldens. Runtime "site" serves the folder from a second local origin with CORS,
-// as a website would, and points the extension's funground.runtimeUrl setting at it.
+// Starts VS Code for the web with @vscode/test-web (it downloads the stable web build once into .vscode-test-web/ and
+// reuses it), with this extension in development mode and a copy of sketchbook/ as the workspace. Then it drives headless
+// Chrome with Playwright as a learner would: open a sketch (a click in the Explorer), run "funground: Run" (F1), type,
+// save. It reads what the preview panel did from its page (window.fungroundPreview, media/preview.js) and writes
+// out/<label>/report.json and the frames as raw RGBA, which compare.py checks against funground's goldens.
+// Runtime "bundled" needs an extension built with the runtime inside (build.py). "site:<folder>" serves build.py --site's
+// folder from a second local origin with CORS, as the website would, and points the extension's funground.runtimeUrl
+// setting at it. "published:<folder>" leaves the setting empty, so the extension looks for the website's folder for its
+// version, and answers that URL from the folder. For both, build the extension with --runtime site: nothing can then be
+// read from inside it.
 
 import { spawn } from "node:child_process";
-import { cpSync, mkdirSync, rmSync, writeFileSync, existsSync, symlinkSync, readFileSync, statSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-let EXTENSION = resolve(HERE, "..");
+const EXTENSION = resolve(HERE, "..");
 const args = Object.fromEntries(process.argv.slice(2).reduce((pairs, arg, i, all) => (arg.startsWith("--") ? [...pairs, [arg.slice(2), all[i + 1]]] : pairs), []));
 const runtime = args.runtime ?? "bundled";
-const label = args.label ?? `${(args.vscode ?? "").split(":")[0]}-${runtime.split(":")[0]}`;
+const label = args.label ?? runtime.split(":")[0];
 const OUT = join(HERE, "out", label);
 const VSCODE_PORT = Number(args.port ?? 3000);
 const SITE_PORT = VSCODE_PORT + 100;
-const CHROMIUM = args.chromium ?? "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
+const CHROME = args.chromium ?? "C:/Users/samirj/AppData/Local/Google/Chrome/Application/chrome.exe";
 const LIVE_EDITS = 5;
 // VS Code's webview service worker treats a request to localhost specially: from the runner's worker it waits 30 s for an
 // answer that never comes, then fetches directly (src/vs/workbench/contrib/webview/browser/pre/service-worker.js,
@@ -36,7 +40,7 @@ const LIVE_EDITS = 5;
 const HOST = args.host ?? "vscode.localhost";
 const SITE_HOST = HOST === "localhost" ? "127.0.0.1" : "runtime.localhost";
 
-const report = { label, host: HOST, runtime, vscode: args.vscode, started: new Date().toISOString(), steps: [], cases: {}, live: [], errors: [] };
+const report = { label, host: HOST, runtime, chrome: CHROME, started: new Date().toISOString(), steps: [], cases: {}, live: [], errors: [] };
 const log = (...parts) => { const line = parts.join(" "); console.log(line); report.steps.push(line); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -47,38 +51,14 @@ mkdirSync(join(OUT, "frames"), { recursive: true });
 const workspace = join(OUT, "sketchbook");
 cpSync(join(HERE, "sketchbook"), workspace, { recursive: true });
 
-// ---- --csp unsafe-eval: a copy of the extension whose panel also allows 'unsafe-eval' (to measure what it would enable;
-// the extension itself never asks for it)
-
-if (args.csp === "unsafe-eval") {
-  const copy = join(OUT, "extension");
-  mkdirSync(copy, { recursive: true });
-  for (const name of ["package.json", "extension.js", "media"]) cpSync(join(EXTENSION, name), join(copy, name), { recursive: true });
-  const source = readFileSync(join(copy, "extension.js"), "utf8");
-  const patched = source.replace("${sources} 'wasm-unsafe-eval'`", "${sources} 'wasm-unsafe-eval' 'unsafe-eval'`");
-  if (patched === source) throw new Error("the CSP line was not found");
-  writeFileSync(join(copy, "extension.js"), patched);
-  EXTENSION = copy;
-  report.csp = "unsafe-eval added";
-}
-
-// ---- --install workspace: no development mode; the extension is a folder in the sketchbook's .vscode/extensions/, as a
-// template repository could carry it, and is installed from VS Code's "recommended for this repository" notification.
-
-const workspaceInstall = args.install === "workspace";
-if (workspaceInstall) {
-  const target = join(workspace, ".vscode", "extensions", "funground");
-  mkdirSync(target, { recursive: true });
-  for (const name of ["package.json", "extension.js", "media"]) cpSync(join(EXTENSION, name), join(target, name), { recursive: true });
-}
-
 // ---- the runtime site (a second origin, with CORS, as GitHub Pages serves one)
 
 const TYPES = { ".mjs": "text/javascript", ".js": "text/javascript", ".json": "application/json", ".wasm": "application/wasm", ".zip": "application/zip", ".whl": "application/zip" };
 let siteBytes = 0;
 let site = null;
-if (runtime.startsWith("site:")) {
-  const root = resolve(runtime.slice(5));
+const published = runtime.startsWith("published:");     // no setting: the extension's default, the website's folder (routed to the local copy)
+if (runtime.startsWith("site:") || published) {
+  const root = resolve(runtime.slice(runtime.indexOf(":") + 1));
   site = createServer((request, response) => {
     const path = join(root, decodeURIComponent(new URL(request.url, "http://x").pathname));
     if (!path.startsWith(root) || !existsSync(path) || !statSync(path).isFile()) { response.writeHead(404, { "Access-Control-Allow-Origin": "*" }); response.end(); return; }
@@ -87,47 +67,59 @@ if (runtime.startsWith("site:")) {
     response.writeHead(200, { "Content-Type": TYPES[extname(path)] ?? "application/octet-stream", "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=600" });
     response.end(data);
   }).listen(SITE_PORT, "127.0.0.1");
-  const settings = JSON.parse(readFileSync(join(workspace, ".vscode", "settings.json"), "utf8"));
-  settings["funground.runtimeUrl"] = `http://${SITE_HOST}:${SITE_PORT}/`;
-  writeFileSync(join(workspace, ".vscode", "settings.json"), JSON.stringify(settings, null, 2));
+  if (!published) {
+    const settings = JSON.parse(readFileSync(join(workspace, ".vscode", "settings.json"), "utf8"));
+    settings["funground.runtimeUrl"] = `http://${SITE_HOST}:${SITE_PORT}/`;
+    writeFileSync(join(workspace, ".vscode", "settings.json"), JSON.stringify(settings, null, 2));
+  }
 }
 
 // ---- VS Code for the web
 
-const [kind, where] = (args.vscode ?? "").split(/:(.*)/s);
-const serverArgs = ["--browserType", "none", "--port", String(VSCODE_PORT), ...(workspaceInstall ? [] : [`--extensionDevelopmentPath=${EXTENSION}`])];
+const DATA_DIR = join(HERE, ".vscode-test-web");                              // the downloaded build is kept here (git-ignored)
+const serverArgs = ["--browserType", "none", "--port", String(VSCODE_PORT), `--extensionDevelopmentPath=${EXTENSION}`, "--testRunnerDataDir", DATA_DIR];
+const [kind, where] = (args.vscode ?? "stable").split(/:(.*)/s);
 if (kind === "sources") serverArgs.push("--sourcesPath", resolve(where));
-else if (kind === "static") {
-  // A VS Code web build already on disk, placed where @vscode/test-web looks for a downloaded one.
-  const data = join(HERE, ".vscode-test-web");
-  const folder = join(data, "vscode-web-stable-0000000000000000000000000000000000000001");
-  if (!existsSync(join(folder, "version"))) {
-    rmSync(folder, { recursive: true, force: true });
-    mkdirSync(data, { recursive: true });
-    symlinkSync(resolve(where), folder);
-    writeFileSync(join(resolve(where), "version"), "vscode-web-stable-0000000000000000000000000000000000000001");
-  }
-  serverArgs.push("--quality", "stable", "--commit", "0000000000000000000000000000000000000001", "--testRunnerDataDir", data);
-} else throw new Error("--vscode sources:<path> or static:<path>");
+else if (kind === "stable") serverArgs.push("--quality", "stable");
+else throw new Error("--vscode sources:<path> (the default is the stable web build)");
 serverArgs.push(workspace);
-const server = spawn(join(HERE, "node_modules", ".bin", "vscode-test-web"), serverArgs, { stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn(process.execPath, [join(HERE, "node_modules", "@vscode", "test-web", "out", "server", "index.js"), ...serverArgs], { stdio: ["ignore", "pipe", "pipe"] });
+process.on("exit", () => server.kill());                                            // never leave the server behind
 server.stdout.on("data", (d) => process.stdout.write(`[server] ${d}`));
 server.stderr.on("data", (d) => process.stdout.write(`[server] ${d}`));
-for (let i = 0; i < 120; i++) {
+for (let i = 0; i < 240; i++) {                                                // the first run downloads VS Code
   try { if ((await fetch(`http://localhost:${VSCODE_PORT}/`)).ok) break; } catch { /* not yet */ }
   await sleep(500);
 }
 
 const browser = await chromium.launch({
-  executablePath: CHROMIUM,
+  executablePath: CHROME,
   headless: true,
   args: [
     "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",   // a microphone that says yes, if asked
   ],
 });
 const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
-await context.grantPermissions(["microphone"]);
+// "local-network-access": Chrome 142 and later asks before a page reaches a loopback address from another origin (VS Code's
+// extension host and webview frames are subdomains of vscode.localhost); headless Chrome cannot ask, so it is given.
+await context.grantPermissions(["microphone", "local-network-access"]);
 const page = await context.newPage();
+// The extension host's own iframe (not the preview panel) allows scripts and requests only to https: and to http://localhost:*, so on
+// vscode.localhost it cannot load its worker. The page that lists those sources is served with one more: our host name.
+// Nothing about the extension or its panel's policy is touched.
+await context.route(/webWorkerExtensionHostIframe\.html/, async (route) => {
+  const html = await (await fetch(`http://localhost:${VSCODE_PORT}${new URL(route.request().url()).pathname}`)).text();
+  await route.fulfill({ contentType: "text/html", body: html.replaceAll("http://localhost:*", `http://localhost:* http://${HOST}:*`) });
+});
+if (published) {
+  // https://funground-hq.github.io/runtime/<fungroundRuntime>/ answered from the local copy, with the CORS header GitHub Pages sends
+  const folder = `/runtime/${JSON.parse(readFileSync(join(EXTENSION, "package.json"), "utf8")).fungroundRuntime}`;
+  await context.route(`https://funground-hq.github.io${folder}/**`, async (route) => {
+    const local = await fetch(`http://127.0.0.1:${SITE_PORT}${new URL(route.request().url()).pathname.slice(folder.length)}`);
+    const headers = { "Access-Control-Allow-Origin": "*", "Content-Type": local.headers.get("content-type") ?? "application/octet-stream" };
+    await route.fulfill({ status: local.status, headers, body: Buffer.from(await local.arrayBuffer()) });
+  });
+}
 const consoleLines = [];
 page.on("console", (m) => { if (/runner|funground|Refused|CSP|Content Security|worker/i.test(m.text())) consoleLines.push(`${m.type()}: ${m.text()}`.slice(0, 500)); });
 const requests = [];
@@ -145,26 +137,6 @@ try {
   await sleep(4000);                                                            // the extension host and the explorer settle
   report.vscodeVersion = await page.evaluate(() => document.querySelector("meta[name=version]")?.content ?? null);
   log(`workbench up in ${Date.now() - t0} ms`);
-  if (workspaceInstall) {
-    // The recommendation notification, then its Install button; a trust question may follow.
-    const toast = page.locator(".notification-toast", { hasText: /recommend/i });
-    await toast.waitFor({ timeout: 60000 });
-    report.recommendation = await toast.innerText();
-    await page.screenshot({ path: join(OUT, "recommendation.png") });
-    log(`notification: ${report.recommendation.replace(/\s+/g, " ")}`);
-    await toast.getByRole("button", { name: /^Install/ }).first().click();
-    await sleep(3000);
-    await page.screenshot({ path: join(OUT, "after-install.png") });
-    const dialog = page.locator(".monaco-dialog-box");
-    if (await dialog.count()) {
-      report.installDialog = await dialog.innerText();
-      log(`dialog: ${report.installDialog.replace(/\s+/g, " ")}`);
-      await dialog.getByRole("button", { name: /Trust|Install|Yes|Continue/i }).first().click();
-      await sleep(3000);
-    }
-    await page.screenshot({ path: join(OUT, "installed.png") });
-  }
-
   const openFile = async (name) => {                                         // a click in the Explorer, as a learner would
     await page.locator(`.explorer-folders-view .monaco-list-row[aria-label="${name}"]`).dblclick();
     await page.waitForFunction((n) => document.querySelector(".tab.active")?.textContent?.includes(n), name, { timeout: 20000 });
@@ -213,6 +185,28 @@ try {
     return { width: data.width, height: data.height, frame: frameNumber };
   };
 
+  // The Problems view lists the error the extension marked, with its line ("[Ln 10, Col 1]").
+  const problemLines = async () => {
+    await page.keyboard.press("Control+Shift+M");
+    await sleep(1500);
+    return page.evaluate(() => [...document.querySelectorAll(".markers-panel .monaco-list-row")].map((row) => row.textContent));
+  };
+
+  // uses_helper.py imports helpers.py. Open helpers.py, change its value without saving, come back: the run must use it.
+  const helperEdit = async (frame) => {
+    const printed = (run) => run.output.map(([, text]) => text).find((text) => text.startsWith("helper value")) ?? null;
+    const first = printed((await state(frame)).runs.at(-1));
+    await openFile("helpers.py");
+    await page.keyboard.press("Control+A");
+    await page.keyboard.type("VALUE = 2");
+    await sleep(800);
+    const typed = await page.evaluate(() => document.querySelector(".monaco-editor .view-lines")?.textContent);
+    const before = (await state(frame)).runs.length;
+    await openFile("uses_helper.py");
+    const s = await waitFor(frame, (x) => x.runs.length > before && x.runs.at(-1).filename === "uses_helper.py" && x.runs.at(-1).frames >= 3, "uses_helper.py again");
+    return { helperBefore: first, helperEditor: typed, helperAfter: printed(s.runs.at(-1)), helperRuns: s.runs.slice(-5).map((r) => [r.filename, r.why, r.frames, r.output]) };
+  };
+
   // 1. first load: open a sketch, run the command, wait for Python and the first frame.
   await openFile("first_sketch.py");
   const tRun = Date.now();
@@ -234,7 +228,7 @@ try {
     { file: "tune.py", id: "tune", sound: true },
     { file: "listen.py", id: "listen", microphone: true },
     { file: "oops.py", id: "oops", error: true },
-    { file: "pillow_check.py", id: "pillow_check", check: true },
+    { file: "uses_helper.py", id: "uses_helper", helper: true },
   ];
   for (const c of cases) try {
     const before = (await state(frame)).runs.length;
@@ -253,12 +247,12 @@ try {
       Object.assign(entry, await frame.evaluate((i) => ({ sounds: window.fungroundPreview.runs[i].sounds, audio: window.fungroundPreview.audioState?.() ?? null }), index));
     }
     if (c.microphone) { await sleep(3000); entry.output = (await state(frame)).runs[index].output; entry.audio = await frame.evaluate(() => window.fungroundPreview.audioState?.() ?? null); }
-    if (c.check) { await sleep(500); entry.output = (await state(frame)).runs[index].output; }
     if (c.error) {
       await sleep(1500);
       entry.markers = await page.evaluate(() => document.querySelectorAll(".monaco-editor .squiggly-error").length);
-      entry.problems = await page.evaluate(() => document.querySelector(".statusbar-item[id*='problems'], #status\\.problems")?.textContent ?? null);
+      entry.problems = await problemLines();
     }
+    if (c.helper) Object.assign(entry, await helperEdit(frame));
     report.cases[c.id] = entry;
     log(`${c.file}: frames ${run.frames}, finished ${run.finished}, first frame ${entry.openToFirstFrameMs} ms after opening`);
   } catch (error) {

@@ -28,14 +28,17 @@ const SAMPLE_RATE = 44100;                    // funground's rate for sound and 
  * @param {(text: string, stream: "stdout" | "stderr") => void} options.write  the page's output
  * @param {(samples: Float32Array) => void} options.onChunk  microphone samples, to send to the worker (the buffer is given away)
  * @param {URL} options.workletUrl  microphone-worklet.js
+ * @param {string | null} [options.microphoneRefusal]  when set, the microphone is never asked for: a sketch that starts it gets
+ *   this line in the output instead (for a host that does not allow the microphone, such as VS Code's panel)
  */
-export function createAudio({ write, onChunk, workletUrl }) {
+export function createAudio({ write, onChunk, workletUrl, microphoneRefusal = null }) {
   let context = null;                         // made at the first gesture
   const voices = new Map();                   // number -> the voice
   let skipped = false;                        // the "sound is off" line has been written this run
   let microphone = null;                      // {stream, source, node, listening} once opened
   let microphoneOpening = null;               // the promise of the microphone being opened
   let wanted = "stop";                        // what the sketch last asked of the microphone
+  let refused = false;                        // the microphoneRefusal line has been written this run
 
   // ---- the audio context
 
@@ -166,10 +169,18 @@ export function createAudio({ write, onChunk, workletUrl }) {
   // ---- the microphone
 
   function microphoneCommand({ command: name }) {
+    if (microphoneRefusal !== null) return refuseMicrophone(name);
     wanted = name;
     if (name === "start") openMicrophone().then(() => { if (microphone) microphone.listening = wanted === "start"; });
     else if (name === "stop" && microphone) microphone.listening = false;
     else if (name === "close") closeMicrophone();
+  }
+
+  // The host does not allow the microphone: say so once, and leave the sketch's input empty, as a refusal does.
+  function refuseMicrophone(name) {
+    if (name !== "start" || refused) return;
+    refused = true;
+    write(microphoneRefusal, "stderr");
   }
 
   function openMicrophone() {
@@ -223,6 +234,7 @@ export function createAudio({ write, onChunk, workletUrl }) {
     voices.clear();
     closeMicrophone();
     wanted = "stop";
+    refused = false;
   }
 
   // For tests and tools: is sound unlocked, what each voice is doing, and whether the microphone is open and listening.
