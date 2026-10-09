@@ -4,11 +4,13 @@
 // The page drives it; every message has a `type`.
 //
 //   page -> worker
-//     init   {runtimeUrl?}                  load Pyodide and install everything; answers `ready`
-//     run    {source, filename, width, height, scale, files}   start the file; answers `started`
+//     init   {runtimeUrl?, pyodideUrl?}     load Pyodide and install everything; answers `ready`
+//     run    {source, filename, width, height, scale, files, seed?}   start the file; answers `started`
 //     step   {now}                          one display frame, `now` in seconds; answers `stepped`
 //     event  {kind, x, y, button, key, keyCode, delta}   one input event (funground's InputEvent vocabulary)
 //     microphone {samples}                  a Float32Array of mono samples (-1 to 1, 44 100 Hz) the microphone heard
+//     stop                                  end the run (the sketch's finish() runs), so the worker can run another file;
+//                                           answers `stopped`. Used by runner.js's `reuse` option (spike S-156)
 //
 //   worker -> page
 //     ready    {versions, timings, resources}   everything is installed and checked
@@ -20,9 +22,10 @@
 //     sound    {command, voice, fields, samples} a sound command for Web Audio (funground/platform/browser_audio.py has the
 //                                               list); `samples` is a Float32Array whose buffer is transferred, for "load" only
 //     microphone {command}                      "start", "stop" or "close": the sketch wants the microphone listened to or let go
+//     stopped  {}                               the run asked to stop has ended; the worker is ready for another `run`
 //
-// There is no `stop` message: the page stops a run by terminating the worker, the only way to end a sketch that
-// never returns (`while True:`). A sketch that ends by itself finishes normally and says `stepped {running: false}`.
+// A sketch that never returns (`while True:`) cannot answer `stop`: the page ends such a run by terminating the worker.
+// A sketch that ends by itself finishes normally and says `stepped {running: false}`.
 //
 // Frames. funground hands over each finished frame as the Cairo surface's bytes (BGRA, premultiplied) in a view
 // valid only during the call. We copy it once, into a fresh buffer, converting to the RGBA, straight-alpha bytes
@@ -66,15 +69,15 @@ const output = (stream) => (text) => post({ type: "output", stream, text });
 
 // ---- setup
 
-async function init({ runtimeUrl }) {
+async function init({ runtimeUrl, pyodideUrl = PYODIDE }) {
   const runtime = new URL(runtimeUrl ?? "runtime/", import.meta.url);
   const timings = {};
   let t = performance.now();
   const lap = (name) => { timings[name] = Math.round(performance.now() - t); t = performance.now(); console.debug(`runner: ${name} ${timings[name]} ms`); };
 
-  const { loadPyodide } = await import(PYODIDE + "pyodide.mjs");
+  const { loadPyodide } = await import(pyodideUrl + "pyodide.mjs");
   py = await loadPyodide({
-    indexURL: PYODIDE,
+    indexURL: pyodideUrl,
     stdout: output("stdout"),
     stderr: output("stderr"),
     env: { SDL_VIDEODRIVER: "dummy", FUNGROUND_HEADLESS: "1", PYGAME_HIDE_SUPPORT_PROMPT: "1" },
@@ -87,14 +90,19 @@ async function init({ runtimeUrl }) {
   lap("packages");
 
   // funground's dependencies, each from where it is found: the C-extension wheels (pycairo, uharfbuzz, skia-pathops) from
-  // our own runtime folder, fonttools from Pyodide, svgelements and pypdf from PyPI, pygame-ce on demand (ON_DEMAND).
+  // our own runtime folder, fonttools from Pyodide, svgelements and pypdf from PyPI (or from the runtime folder when its
+  // manifest lists them as "dependency", for a host that must not reach PyPI), pygame-ce on demand (ON_DEMAND).
   // So funground itself is installed without dependencies: with them, micropip would fetch pygame-ce for every run.
   py.globals.set("c_wheels", wheelUrls("c-extension"));
+  py.globals.set("dependency_wheels", wheelUrls("dependency"));
   py.globals.set("funground_wheel", wheelUrls("funground")[0]);
   await py.runPythonAsync(`
 import micropip
 await micropip.install(list(c_wheels), deps=False)
-await micropip.install(["svgelements>=1.9", "pypdf>=5"])
+if dependency_wheels:
+    await micropip.install(list(dependency_wheels), deps=False)
+else:
+    await micropip.install(["svgelements>=1.9", "pypdf>=5"])
 await micropip.install(funground_wheel, deps=False)
 `);
   lap("wheels");
@@ -136,7 +144,7 @@ def check_real_libraries():
 
 // ---- a run
 
-async function run({ source, filename, width, height, scale, files }) {
+async function run({ source, filename, width, height, scale, files, seed }) {
   py.runPython("import os, tempfile; os.chdir(tempfile.mkdtemp())");       // a folder of its own for what the file saves
   for (const [name, bytes] of Object.entries(files ?? {})) {               // data the file reads, beside it ("data/photo.jpg")
     const folder = name.split("/").slice(0, -1).join("/");
@@ -144,6 +152,7 @@ async function run({ source, filename, width, height, scale, files }) {
     py.FS.writeFile(name, new Uint8Array(bytes));
   }
   await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
+  if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // a repeatable run (tests compare with goldens)
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
   session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest);
@@ -241,7 +250,18 @@ function postMicrophoneRequest(command) {
 
 // ---- messages
 
-const handlers = { init, run, step, event, microphone };
+function stop() {
+  try {
+    session?.stop();
+  } catch (error) {
+    fail(error);                                                           // an error in the sketch's finish()
+  } finally {
+    session = null;
+    post({ type: "stopped" });
+  }
+}
+
+const handlers = { init, run, step, event, microphone, stop };
 
 self.onmessage = async (e) => {
   try {

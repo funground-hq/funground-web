@@ -34,6 +34,11 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 - Sound and the microphone work with no setup (next section). `onSound(message)` sees each sound command (for tests
   and tools); `runner.audioState()` says whether sound is unlocked and what each voice is doing.
 - `runner.info`: library versions, load times per stage and bytes fetched, as the first worker reported them.
+- Options added for the VS Code panel (spike S-156; all off by default): `pyodideUrl` and `runtimeUrl` (where Pyodide and
+  the wheels load from), `run(..., {seed})` (a repeatable run), `spare` (keep the next worker loaded) and `reuse` (run the
+  next sketch in the same worker when the last one stops on request; a sketch that does not stop within 250 ms has its
+  worker ended). A runner whose files are on another origin starts its worker from a `blob:` URL. A manifest entry with
+  role `dependency` is installed from the runtime folder instead of PyPI. Results: `spikes/S-156_RESULTS.md`.
 
 ## The runtime folder
 
