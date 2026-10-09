@@ -7,6 +7,11 @@ Run **funground: Run** (Ctrl+Enter, or the play button) on a Python file. The pa
 runs it again a moment after you stop typing and at once when you save, and shows `print()` output and errors. An
 error's line is also underlined in the editor.
 
+The panel moves to another file only if that file is a sketch it can run: one with a top-level `run()` or `show()`
+call (`f.run()` animates, `f.show()` draws once). Opening a helper such as `palette.py` keeps the sketch that uses it
+in the panel, and changing the helper runs that sketch again. **funground: Run** runs whatever Python file is open,
+for a script that only saves a file.
+
 ## How it works
 
 ```

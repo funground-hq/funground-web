@@ -4,7 +4,7 @@
   "description": "Run a funground sketch beside the editor, in github.dev, vscode.dev and VS Code.",
   "version": "0.1.0",
   "publisher": "funground-hq",
-  "license": "LGPL-2.1-or-later",
+  "license": "LGPL-2.1-only",
   "private": true,
   "fungroundRuntime": "0.2-dev",
   "engines": { "vscode": "^1.90.0" },
