@@ -31,7 +31,10 @@ export async function start({ runner: runnerBase, pyodide, runtime, where }) {
   try {
     const { createRunner } = await import(new URL("runner.js", runnerBase).href);
     runner = await createRunner({
-      canvas, baseUrl: runnerBase, pyodideUrl: pyodide, runtimeUrl: runtime, reuse: true,
+      canvas, baseUrl: runnerBase, pyodideUrl: pyodide, runtimeUrl: runtime,
+      reuse: true,                               // D-083: the next sketch runs in the same Python
+      microphoneRefusal: "The microphone cannot be used in this panel (VS Code does not allow it). " +
+        "Run sketches that listen on the funground website or on your computer.",
       output: (text, stream) => {
         write(text, stream);
         if (stream === "stderr" && text.includes("Traceback")) vscode.postMessage({ type: "error", text });

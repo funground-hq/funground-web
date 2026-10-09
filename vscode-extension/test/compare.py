@@ -1,4 +1,4 @@
-r"""Check the frames run_tests.mjs saved against funground's goldens (spike S-156).
+r"""Check the frames run_tests.mjs saved against funground's goldens (story S-158).
 
     C:\Projects\playground\.venv\Scripts\python.exe vscode-extension/test/compare.py --funground C:\Projects\playground-0.2 out/<label>
 

@@ -1,6 +1,6 @@
-r"""Assemble the funground VS Code extension (spike S-156) from this repository's runner.
+r"""Assemble the funground VS Code extension (story S-158) from this repository's runner.
 
-    C:\Projects\playground\.venv\Scripts\python.exe vscode-extension/build.py [--runtime bundled|site] [--pyodide DIR] [--site OUT] [--vsix]
+    C:\Projects\playground\.venv\Scripts\python.exe vscode-extension/build.py [--runtime bundled|site] [--pyodide DIR] [--site OUT] [--template OUT] [--vsix]
 
 Needs runner/runtime/ (tools/build_runtime.py). Standard library only; nothing is installed. It writes:
 
@@ -10,8 +10,14 @@ Needs runner/runtime/ (tools/build_runtime.py). Standard library only; nothing i
     media/runner/pyodide/    with --runtime bundled: the part of Pyodide the runner uses (core, standard library, and
                              micropip, fonttools, pygame-ce, Pillow), from --pyodide DIR (an unpacked Pyodide release) or
                              from jsDelivr
-    --site OUT               the same pyodide/ and runtime/ folders under OUT, for a site that serves them with CORS
-                             (the extension's "funground.runtimeUrl" setting points at OUT's URL)
+    --site OUT               the website's runtime folder for this extension (D-081): OUT/pyodide/ and OUT/runtime/, the
+                             same two folders. The site serves OUT with CORS at
+                             https://funground-hq.github.io/runtime/<fungroundRuntime in package.json>/
+                             and the extension loads Python from there unless the runtime is bundled or the
+                             "funground.runtimeUrl" setting says otherwise
+    --template OUT           the folder a sketchbook template carries as .vscode/extensions/funground/ (D-082), without
+                             the runtime: package.json, extension.js and media/ (the runner's four scripts, preview.js,
+                             preview.css, icon.svg). OUT must not exist or be empty
     --vsix                   funground-<version>.vsix beside this file (a zip in the format vsce writes)
 
 With --runtime site, media/runner/ holds only the runner's four scripts and the extension loads the rest from the site.
@@ -30,6 +36,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 RUNNER_FILES = ("runner.js", "worker.js", "audio.js", "microphone-worklet.js")
+TEMPLATE_FILES = ("package.json", "extension.js")
+MEDIA_FILES = ("preview.js", "preview.css", "icon.svg")
 PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/"
 PYODIDE_CORE = ("pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json")
 PYODIDE_PACKAGES = ("micropip", "fonttools", "pygame-ce", "pillow")        # worker.js: PYODIDE_PACKAGES and ON_DEMAND
@@ -94,6 +102,23 @@ def copy_runtime(out: Path) -> None:
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
 
+def write_template(out: Path) -> None:
+    """The extension without the runtime, for a template repository to carry (D-082), straight from the sources."""
+    if out.exists() and any(out.iterdir()):
+        sys.exit(f"{out} is not empty")
+    for name in TEMPLATE_FILES:
+        copy_file(HERE / name, out / name)
+    for name in MEDIA_FILES:
+        copy_file(HERE / "media" / name, out / "media" / name)
+    for name in RUNNER_FILES:
+        copy_file(REPO / "runner" / name, out / "media" / "runner" / name)
+
+
+def copy_file(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
 def write_vsix(extension: Path) -> Path:
     """A .vsix: the extension's files under extension/, with the two XML files vsce adds."""
     package = json.loads((extension / "package.json").read_text(encoding="utf-8"))
@@ -141,7 +166,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--runtime", choices=("bundled", "site"), default="bundled")
     parser.add_argument("--pyodide", type=Path, help="an unpacked Pyodide 314.0.7 release (default: download from jsDelivr)")
-    parser.add_argument("--site", type=Path, help="also write pyodide/ and runtime/ under this folder, for a CORS site")
+    parser.add_argument("--site", type=Path, help="also write pyodide/ and runtime/ under this folder, for the website's runtime/<version>/")
+    parser.add_argument("--template", type=Path, help="write the extension folder a sketchbook template carries (no runtime) to this empty folder")
     parser.add_argument("--vsix", action="store_true")
     args = parser.parse_args()
     if not (REPO / "runner" / "runtime" / "manifest.json").exists():
@@ -151,13 +177,16 @@ def main() -> None:
     shutil.rmtree(runner, ignore_errors=True)
     runner.mkdir(parents=True)
     for name in RUNNER_FILES:
-        shutil.copy2(REPO / "runner" / name, runner / name)
+        copy_file(REPO / "runner" / name, runner / name)
     targets = ([runner] if args.runtime == "bundled" else []) + ([args.site.resolve()] if args.site else [])
     for target in targets:
         copy_pyodide(target / "pyodide", args.pyodide)
         copy_runtime(target / "runtime")
         print(f"{target}: pyodide/ {folder_size(target / 'pyodide'):,} bytes, runtime/ {folder_size(target / 'runtime'):,} bytes")
     print(f"extension folder: {folder_size(HERE / 'media') + sum((HERE / n).stat().st_size for n in ('package.json', 'extension.js')):,} bytes")
+    if args.template:
+        write_template(args.template.resolve())
+        print(f"{args.template}: {folder_size(args.template.resolve()):,} bytes")
     if args.vsix:
         vsix = write_vsix(HERE)
         print(f"{vsix.name}: {vsix.stat().st_size:,} bytes")

@@ -31,16 +31,20 @@ const STOP_WAIT_MS = 250;                                         // with `reuse
  *   re-running on every edit) starts at once instead of waiting for Python to load; costs a second Python's memory (default false)
  * @param {boolean} [options.reuse]  run the next sketch in the same worker when the last one has ended or stops when asked
  *   (funground's Session starts each sketch afresh); a sketch that does not stop within STOP_WAIT_MS (`while True:`) still
- *   has its worker ended. Spike S-156; default false (one worker per run, as before)
+ *   has its worker ended (D-083); default false (one worker per run, as before)
+ * @param {string} [options.microphoneRefusal]  for a host that does not allow the microphone (VS Code's panel): the line a sketch
+ *   that starts it gets in its output instead; the browser is not asked and the sketch hears nothing (default: none, the
+ *   microphone is asked for as usual)
  * @returns {Promise<{info: object, run: Function, stop: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onSound, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onSound, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null }) {
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
     write,
     workletUrl: new URL("microphone-worklet.js", baseUrl),
     onChunk: (samples) => { if (run) worker.worker.postMessage({ type: "microphone", samples }, [samples.buffer]); },
+    microphoneRefusal,
   });
   // Browsers keep a page silent until the visitor has clicked or pressed a key on it: the first of either, and Run, unlock sound.
   for (const kind of ["pointerdown", "keydown"]) window.addEventListener(kind, audio.unlock, { capture: true, passive: true });

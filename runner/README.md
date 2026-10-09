@@ -21,7 +21,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 </script>
 ```
 
-- `createRunner({canvas, output, baseUrl, prewarm, onFrame, onFinish, onSound})`. `baseUrl` is the folder holding
+- `createRunner({canvas, output, baseUrl, prewarm, onFrame, onFinish, onSound, ...})` (the options after `onSound` are in the table below). `baseUrl` is the folder holding
   `worker.js` and `runtime/` (default: next to `runner.js`).
 - `run(source, {filename, files, width, height})`: `files` maps a path to bytes (`{"data/photo.jpg": Uint8Array}`),
   written beside the sketch before it starts. `width`/`height` are the canvas size `f.full_screen()` fills until
@@ -34,11 +34,24 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 - Sound and the microphone work with no setup (next section). `onSound(message)` sees each sound command (for tests
   and tools); `runner.audioState()` says whether sound is unlocked and what each voice is doing.
 - `runner.info`: library versions, load times per stage and bytes fetched, as the first worker reported them.
-- Options added for the VS Code panel (spike S-156; all off by default): `pyodideUrl` and `runtimeUrl` (where Pyodide and
-  the wheels load from), `run(..., {seed})` (a repeatable run), `spare` (keep the next worker loaded) and `reuse` (run the
-  next sketch in the same worker when the last one stops on request; a sketch that does not stop within 250 ms has its
-  worker ended). A runner whose files are on another origin starts its worker from a `blob:` URL. A manifest entry with
-  role `dependency` is installed from the runtime folder instead of PyPI. Results: `spikes/S-156_RESULTS.md`.
+- Options for the VS Code panel (S-156, S-158). All are off or default by default, so `demo.html` and the website behave as
+  before. They go in `createRunner({...})` unless the table says `run()`.
+
+| Option | Default | What it does |
+|---|---|---|
+| `pyodideUrl` | jsDelivr (in `worker.js`) | The folder Pyodide loads from. |
+| `runtimeUrl` | `runtime/` under `baseUrl` | The folder holding `manifest.json` and the wheels. A manifest entry with role `dependency` is installed from there instead of PyPI. |
+| `reuse` (D-083) | `false` | Run the next sketch in the same worker (the same Python) when the last one has ended, or stops when asked: a re-run takes about 0.1 s instead of loading Python again. funground's `Session` starts each sketch afresh. A sketch that does not stop within 250 ms (`while True:`) still has its worker ended. |
+| `spare` | `false` | While a sketch runs, keep the next run's worker loaded too, so that a re-run starts at once. Costs a second Python's memory. Not needed with `reuse`. |
+| `microphoneRefusal` | none | For a host that does not allow the microphone (VS Code's panel): the line a sketch that calls `mic.start()` gets in its output instead. The browser is not asked, and the sketch hears nothing (as after a refusal). |
+| `run(source, {seed})` | none | Seed funground's random numbers for this run, so every run draws the same (tests compare frames with goldens). It is applied to the run's own sketch, after funground's `Session` is made. |
+
+  A runner whose files are on another origin (a VS Code webview loads them from its resource origin) starts its worker from a
+  `blob:` URL. Results: `spikes/S-156_RESULTS.md`, `vscode-extension/RESULTS.md`.
+- Beside the sketch. Each run gets a fresh working folder, which is also first on Python's import path (as the sketch's own
+  folder is under `python sketch.py`). `run(..., {files})` writes into it, so `files` can hold data (`data/photo.png`) and
+  other `.py` files the sketch imports (`helpers.py`); modules imported that way are forgotten when the run stops, so an
+  edited helper is read again.
 
 ## The runtime folder
 
