@@ -25,3 +25,11 @@ session: sprints, stories, design notes, ADRs, decision log, sprint reviews, mod
   `/c/sw/nodejs/node`; no npm or pip installs, no installers.
 - Pyodide and other browser runtimes are fetched as files into the repository or a CDN, never
   installed.
+
+## Layout
+
+- `runner/`: the browser runner (S-153, S-137). `worker.js` (Pyodide + funground in a module worker), `audio.js` and `microphone-worklet.js` (sound and microphone), `runner.js` (the
+  page API), `demo.html`, `README.md` (how a page uses it). `runner/runtime/` is built, git-ignored.
+- `tools/build_runtime.py` fills `runner/runtime/` (wheels, examples, manifest); `tools/test_runner.py` tests the
+  runner in headless Chrome; `tests/runner/test.html` is its page.
+- `spikes/`, `harness/`, `renderer/` etc. live on the `spike/*` branches, not on `main`.

@@ -1,0 +1,159 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>funground runner tests</title>
+<body>
+<canvas id="canvas" width="640" height="400"></canvas>
+<pre id="output"></pre>
+<script type="module">
+// Driven by tools/test_runner.py, which serves this page, receives the results and the canvas snapshots, and
+// stops Chrome. It uses the runner exactly as a site would (runner/runner.js) and nothing else.
+import { createRunner } from "/runner/runner.js";
+
+const canvas = document.getElementById("canvas");
+const lines = [];
+let frameCount = 0, finished = null;
+let snapshotAt = 0, snapshot = null;                  // the canvas as it is when frame `snapshotAt` is drawn
+const report = { cases: [], scenarios: {} };
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const post = (path, body) => fetch(path, { method: "POST", body });
+const log = (text) => { console.log(text); return post("/log", `${Math.round(performance.now() / 1000)} s  ${text}`); };
+const until = async (condition, ms, what) => {
+  const end = performance.now() + ms;
+  while (!condition()) {
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await sleep(20);
+  }
+};
+
+try {
+const t0 = performance.now();
+const runner = await createRunner({
+  canvas,
+  baseUrl: new URL("/runner/", location.href),
+  prewarm: new URLSearchParams(location.search).get("prewarm") !== "0",
+  output: (text, stream) => lines.push({ stream, text }),
+  onFrame: (n) => {
+    frameCount = n;
+    if (n === 1) report.first_frame_ms ??= Math.round(performance.now());      // since the page began loading: the first frame of the first sketch
+    if (n === snapshotAt) snapshot = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+  },
+  onFinish: (reason) => { finished = reason; },
+});
+report.first_load_ms = Math.round(performance.now() - t0);
+report.ready = runner.info;
+
+async function start(source, options) {
+  frameCount = 0; finished = null; lines.length = 0;
+  return runner.run(source, options);
+}
+
+// ---- the examples: the frame at `frames` is sent to the driver, which compares it with the golden.
+// The goldens are made with the random generator seeded with 0 (tests/conftest.py), so each file starts with that
+// one line, and the canvas is copied in the frame callback, at exactly frame `frames`, not some frames later.
+const cases = await (await fetch("/cases.json")).json();
+for (const c of cases) {
+  const result = { id: c.id };
+  log(`case ${c.id}`);
+  try {
+    const base = `/runner/runtime/examples/${c.source.slice(0, c.source.lastIndexOf("/") + 1)}`;
+    const source = await (await fetch(`/runner/runtime/examples/${c.source}`)).text();
+    const files = {};
+    for (const name of c.files) files[name] = new Uint8Array(await (await fetch(base + name)).arrayBuffer());
+    log('start ' + c.id);
+    const t = performance.now();
+    snapshotAt = c.frames; snapshot = null;
+    const started = await start("import funground\nfunground.random_seed(0)\n" + source, { filename: c.source.split("/").pop(), files, width: 640, height: 400 });
+    result.start_ms = Math.round(performance.now() - t);
+    if (!started.ok) throw new Error(lines.map((l) => l.text).join("\n"));
+    await until(() => snapshot !== null, 60000, `frame ${c.frames}`);
+    const data = snapshot;
+    await post(`/snap?id=${c.id}&w=${data.width}&h=${data.height}`, data.data);
+    result.frame_ms = Math.round(performance.now() - t);
+    result.output = lines.map((l) => l.text);
+    runner.stop();
+  } catch (error) {
+    result.error = String(error.message ?? error);
+    result.output = lines.map((l) => l.text);
+    runner.stop();
+  }
+  report.cases.push(result);
+}
+
+log('Stop: a sketch');
+const scenarios = new URLSearchParams(location.search).get("scenarios") === "1";
+if (scenarios) {
+// ---- Stop: a sketch that never returns from draw()
+{
+  const source = "import funground as f\ndef setup():\n    f.size(200, 200)\ndef draw():\n    f.background('white')\n    if f.frame_count > 5:\n        while True:\n            pass\nf.run()\n";
+  await start(source, { filename: "hang.py" });
+  await until(() => frameCount >= 3, 20000, "frames before the hang");
+  await sleep(1500);                                              // it is spinning by now
+  let beats = 0;
+  const beat = setInterval(() => beats++, 50);                    // the page's own thread must stay alive
+  const t = performance.now();
+  runner.stop();
+  const stopMs = performance.now() - t;
+  const framesAtStop = frameCount;
+  await sleep(1000);
+  clearInterval(beat);
+  const framesAfterStop = frameCount - framesAtStop;
+  const next = await start("import funground as f\nf.size(100, 100)\nf.background('red')\nf.show()\n", { filename: "after.py" });
+  report.scenarios.stop = { stop_call_ms: Math.round(stopMs * 10) / 10, finished_reason: finished, frames_after_stop: framesAfterStop,
+    page_beats_in_1s: beats, next_run_ok: next.ok };
+  runner.stop();
+}
+
+log('print and traceback');
+// ---- print and traceback
+{
+  const source = "import funground as f\nprint('hello', 42)\ndef draw():\n    f.background('white')\n    print(1 / 0)\nf.run()\n";
+  log("bad.py starting");
+  const started = await start(source, { filename: "bad.py" });
+
+  log(`bad.py started ${JSON.stringify(started)}`);
+  await until(() => finished !== null, 20000, "the error");
+  report.scenarios.errors = { started: started.ok, finished, output: lines.map((l) => ({ ...l })) };
+}
+
+log('syntax error');
+// ---- syntax error and an error in setup, before the file starts
+{
+  const started = await start("def broken(:\n    pass\n", { filename: "syntax.py" });
+  report.scenarios.syntax = { ok: started.ok, finished, output: lines.map((l) => ({ ...l })) };
+}
+
+log('input events');
+// ---- input events reach the sketch (logical pixels)
+{
+  const source = [
+    "import funground as f", "def setup():", "    f.size(300, 200)", "def draw():", "    pass",
+    "def mouse_pressed():", "    print('pressed', f.mouse_x, f.mouse_y, f.mouse_button)",
+    "def key_pressed():", "    print('key', repr(f.key))",
+    "def mouse_wheel(delta):", "    print('wheel', delta)", "f.run()"].join("\n");
+  await start(source, { filename: "events.py" });
+  log("events started");
+  await until(() => frameCount >= 2, 20000, "a frame");
+  log("events frames");
+  const box = canvas.getBoundingClientRect();
+  const at = (x, y) => ({ clientX: box.left + x, clientY: box.top + y, pointerId: 1, bubbles: true, button: 0, buttons: 1 });
+  canvas.dispatchEvent(new PointerEvent("pointermove", at(30, 40)));
+  canvas.dispatchEvent(new PointerEvent("pointerdown", at(30, 40)));
+  canvas.dispatchEvent(new KeyboardEvent("keydown", { key: "a", keyCode: 65, bubbles: true }));
+  canvas.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", keyCode: 37, bubbles: true }));
+  canvas.dispatchEvent(new WheelEvent("wheel", { clientX: box.left + 5, clientY: box.top + 6, deltaY: 100, bubbles: true, cancelable: true }));
+  await sleep(1500);
+  report.scenarios.events = { canvas_css: [canvas.style.width, canvas.style.height], output: lines.map((l) => l.text) };
+  runner.stop();
+  log('events done');
+}
+
+}
+// ---- a different backing scale is the page's business (devicePixelRatio); report what this run used
+report.scenarios.dpr = window.devicePixelRatio;
+report.page_resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize }));
+} catch (error) {
+  report.fatal = String(error.stack ?? error);
+}
+log("posting result");
+await post("/result", JSON.stringify(report));
+</script>
