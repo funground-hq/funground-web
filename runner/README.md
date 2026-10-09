@@ -42,14 +42,17 @@ header, so the site copies these at build time.
 
 It downloads the three C-extension wheels from the `funground-cairo-wasm` release (checked against its
 `SHA256SUMS.txt`), builds the funground wheel from the checkout, copies the examples, and writes `manifest.json`.
-Pyodide itself comes from jsDelivr; `fonttools`, `pygame-ce`, `pillow` from the Pyodide distribution;
-`svgelements` and `pypdf` from PyPI through micropip (dependencies of the funground wheel).
+Pyodide itself comes from jsDelivr; `fonttools` from the Pyodide distribution; `svgelements` and `pypdf` from PyPI
+through micropip. `pygame-ce` and `pillow` (Pyodide distribution) are loaded only for a sketch that calls a picture or
+sound function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps that list complete).
 
 ## Demo, tests
 
 - `runner/demo.html`: serve the repository root with the venv's `python -m http.server` and open `/runner/demo.html`.
 - `tools/test_runner.py --funground <checkout>`: headless Chrome, Session 1 and gallery examples against the goldens
-  (byte for byte at 1x), Stop, errors, events. Reports in `tests/out/` (git-ignored).
+  (byte for byte at 1x), Stop, errors, events. Reports in `tests/out/` (git-ignored). `--dpr 1.25` checks a fractional
+  scale (size and not blank); `--limit 1 --skip-scenarios [--profile DIR]` measures first load.
+- Numbers and how they were measured: `RESULTS.md`.
 
 ## Frames
 
@@ -59,13 +62,21 @@ transfers the buffer. Converting in the worker keeps the page's thread free; the
 
 ## Known limits (S-153)
 
-- Sound and microphone are S-137: `pygame-ce` is loaded (it decodes pictures) but the mixer is not started.
+Measured results, criteria and noise caveats: `RESULTS.md`.
+
+- Sound and microphone are S-137: the mixer is not started (`pygame-ce` is loaded for a sketch that calls a sound
+  function, and plays nothing).
+- **images-01 is not byte-identical to its golden** (50,454 pixels): Pyodide's JPEG decoder differs from the desktop
+  one (PNG decodes identically). The other 14 of the 15 cases are byte-identical at 1x; at `--dpr 1.25` all 15 give a
+  full, non-blank frame of the right size. A funground-side decision is needed (see RESULTS.md).
+- **First-load budget (S-139) not met on this estimate**: 12.4 MB for a plain sketch (about 10 to 14 s on 10 Mb/s;
+  budget 10 s); a repeat visit took 3.3 to 5.5 s here (budget 3 s). Pictures add 2.56 MB (pygame-ce and Pillow) and
+  about 1.2 s cold, only for sketches that need them. The bundled fonts are 2.42 MB of the funground wheel.
+- A function that needs pygame-ce and is missing from `ON_DEMAND` fails with "No module named 'pygame'":
+  `tools/check_on_demand.py --funground <checkout>` finds such a function. `tint` is listed by hand.
 - Chrome only was tried. Headless Chrome has no real vsync, so frame rates are not measured here.
 - Each run needs a fresh worker (about 5 s on the slow test machine, hidden by `prewarm`).
-- Not finished in S-153 (the builder's session ended): the byte-for-byte golden comparison over the whole case list
-  and the cold/warm first-load measurement. The maintainer ran the demo by hand in Chrome on 9 October 2026:
-  animations, interaction, scripts and studios-03 (an A4 script) render; code editing works.
-- Fixed after that hand test: (1) a script's frame was wiped when `started` set the canvas size (setting a
-  canvas's size clears it); (2) at a fractional `devicePixelRatio` the page's rounding of logical size x scale
-  differed from funground's by a pixel and wiped the frame again. The canvas's backing size now comes only
-  from the frames.
+- The maintainer ran the demo by hand in Chrome on 9 October 2026: animations, interaction, scripts and studios-03
+  (an A4 script) render; code editing works. Two bugs found then are fixed: a script's frame was wiped when `started`
+  set the canvas size, and at a fractional `devicePixelRatio` the page's rounding differed from funground's by a
+  pixel. The canvas's backing size now comes only from the frames.

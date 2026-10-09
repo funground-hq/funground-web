@@ -26,9 +26,27 @@
 // and the copy has to happen anyway because the view dies when the call returns.
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
-const PYODIDE_PACKAGES = ["micropip", "fonttools", "pygame-ce", "pillow"];     // from the Pyodide distribution
-// pygame-ce decodes pictures (funground.imaging) and pillow filters and GIFs. svgelements and pypdf are pure
-// Python: micropip fetches them from PyPI as dependencies of the funground wheel.
+const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
+
+// Packages only some sketches need, loaded by run() when the file calls one of the functions listed (a call is a
+// name followed by "(", so `f.get(x, y)` counts and `get` alone does not). Python imports cannot wait for a
+// download, so the decision is made from the source before it runs; a function missing here fails with "No module
+// named 'pygame'", which tools/check_on_demand.py catches. Why each group needs its packages:
+//   pictures: funground.imaging decodes and changes pictures with pygame-ce; Pillow does its filters faster.
+//   sound:    funground.sound opens pygame's mixer (silent here: the audio driver is "dummy", sound is S-137).
+const ON_DEMAND = [
+  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "get", "load_pixels", "update_pixels", "filter", "resize", "mask", "tint"] },
+  { packages: ["pygame-ce"], calls: ["load_sound", "create_sound", "tone", "note", "pluck", "melody", "sequence", "mix", "tala", "drone",
+    "microphone", "microphones", "draw_wave", "draw_spectrum", "spectrogram", "draw_pitch_line"] },
+];
+
+function packagesFor(source) {
+  const wanted = new Set();
+  for (const { packages, calls } of ON_DEMAND) {
+    if (new RegExp(String.raw`\b(${calls.join("|")})\s*\(`).test(source)) packages.forEach((name) => wanted.add(name));
+  }
+  return [...wanted];
+}
 
 let py = null;
 let session = null;
@@ -50,7 +68,7 @@ async function init({ runtimeUrl }) {
     indexURL: PYODIDE,
     stdout: output("stdout"),
     stderr: output("stderr"),
-    env: { SDL_VIDEODRIVER: "dummy", SDL_AUDIODRIVER: "dummy", FUNGROUND_HEADLESS: "1" },
+    env: { SDL_VIDEODRIVER: "dummy", SDL_AUDIODRIVER: "dummy", FUNGROUND_HEADLESS: "1", PYGAME_HIDE_SUPPORT_PROMPT: "1" },
   });
   lap("pyodide");
 
@@ -59,13 +77,16 @@ async function init({ runtimeUrl }) {
   await py.loadPackage(PYODIDE_PACKAGES, { messageCallback: console.log, errorCallback: console.error });   // not the learner's output
   lap("packages");
 
-  // The C-extension wheels first, then funground, whose dependencies (pycairo, uharfbuzz and skia-pathops among them) are then met.
+  // funground's dependencies, each from where it is found: the C-extension wheels (pycairo, uharfbuzz, skia-pathops) from
+  // our own runtime folder, fonttools from Pyodide, svgelements and pypdf from PyPI, pygame-ce on demand (ON_DEMAND).
+  // So funground itself is installed without dependencies: with them, micropip would fetch pygame-ce for every run.
   py.globals.set("c_wheels", wheelUrls("c-extension"));
   py.globals.set("funground_wheel", wheelUrls("funground")[0]);
   await py.runPythonAsync(`
 import micropip
 await micropip.install(list(c_wheels), deps=False)
-await micropip.install(funground_wheel)
+await micropip.install(["svgelements>=1.9", "pypdf>=5"])
+await micropip.install(funground_wheel, deps=False)
 `);
   lap("wheels");
 
@@ -106,6 +127,7 @@ async function run({ source, filename, width, height, scale, files }) {
     if (folder) py.FS.mkdirTree(folder);
     py.FS.writeFile(name, new Uint8Array(bytes));
   }
+  await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
   session = Session(width, height, scale, postFrame);

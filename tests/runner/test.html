@@ -12,6 +12,7 @@ import { createRunner } from "/runner/runner.js";
 const canvas = document.getElementById("canvas");
 const lines = [];
 let frameCount = 0, finished = null;
+let snapshotAt = 0, snapshot = null;                  // the canvas as it is when frame `snapshotAt` is drawn
 const report = { cases: [], scenarios: {} };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const post = (path, body) => fetch(path, { method: "POST", body });
@@ -31,7 +32,11 @@ const runner = await createRunner({
   baseUrl: new URL("/runner/", location.href),
   prewarm: new URLSearchParams(location.search).get("prewarm") !== "0",
   output: (text, stream) => lines.push({ stream, text }),
-  onFrame: (n) => { frameCount = n; },
+  onFrame: (n) => {
+    frameCount = n;
+    if (n === 1) report.first_frame_ms ??= Math.round(performance.now());      // since the page began loading: the first frame of the first sketch
+    if (n === snapshotAt) snapshot = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+  },
   onFinish: (reason) => { finished = reason; },
 });
 report.first_load_ms = Math.round(performance.now() - t0);
@@ -42,7 +47,9 @@ async function start(source, options) {
   return runner.run(source, options);
 }
 
-// ---- the examples: the frame at `frames` is sent to the driver, which compares it with the golden
+// ---- the examples: the frame at `frames` is sent to the driver, which compares it with the golden.
+// The goldens are made with the random generator seeded with 0 (tests/conftest.py), so each file starts with that
+// one line, and the canvas is copied in the frame callback, at exactly frame `frames`, not some frames later.
 const cases = await (await fetch("/cases.json")).json();
 for (const c of cases) {
   const result = { id: c.id };
@@ -54,11 +61,12 @@ for (const c of cases) {
     for (const name of c.files) files[name] = new Uint8Array(await (await fetch(base + name)).arrayBuffer());
     log('start ' + c.id);
     const t = performance.now();
-    const started = await start(source, { filename: c.source.split("/").pop(), files, width: 640, height: 400 });
+    snapshotAt = c.frames; snapshot = null;
+    const started = await start("import funground\nfunground.random_seed(0)\n" + source, { filename: c.source.split("/").pop(), files, width: 640, height: 400 });
     result.start_ms = Math.round(performance.now() - t);
     if (!started.ok) throw new Error(lines.map((l) => l.text).join("\n"));
-    await until(() => frameCount >= c.frames, 60000, `frame ${c.frames}`);
-    const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+    await until(() => snapshot !== null, 60000, `frame ${c.frames}`);
+    const data = snapshot;
     await post(`/snap?id=${c.id}&w=${data.width}&h=${data.height}`, data.data);
     result.frame_ms = Math.round(performance.now() - t);
     result.output = lines.map((l) => l.text);
