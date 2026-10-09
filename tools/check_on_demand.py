@@ -4,10 +4,12 @@ r"""Check that runner/worker.js loads pygame-ce for every function that needs it
 
 The worker loads pygame-ce only when a sketch calls a function listed in its ON_DEMAND table, because a Python
 import cannot wait for a download. The table must therefore name every public function that, inside its body,
-imports a funground module that imports pygame (`imaging`, `sound`, `sound_views`, `microphone_input`). This script
-finds those functions in the checkout by reading its source (no import, so no pygame is needed) and fails if one
-is missing from the table. It does not find `tint`, which reaches `imaging` from the renderer, not from a function
-of the API; that name is in the table by hand.
+imports a funground module that imports pygame (`imaging`). This script finds those functions in the checkout by
+reading its source (no import, so no pygame is needed) and fails if one is missing from the table. Sound and the
+microphone need no pygame under the runner (S-137: funground plays through the page), so `sound`, `sound_views` and
+`microphone_input` are not on the list; tests/test_web_sound.py in funground checks that a Session imports no
+pygame. Two names reach `imaging` indirectly and are in the table by hand: `tint` (from the renderer) and
+`spectrogram` (which makes its picture with load_pixels).
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-USES_PYGAME = {"imaging", "sound", "sound_views", "microphone_input"}      # funground modules that import pygame
+USES_PYGAME = {"imaging"}                                  # funground modules that import pygame under the runner
 
 
 def functions_needing_pygame(package: Path) -> dict[str, str]:

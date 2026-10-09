@@ -80,6 +80,20 @@ def download_c_wheels(out: Path) -> list[Path]:
     return found
 
 
+def keep_c_wheels(out: Path, manifest: Path) -> list[Path]:
+    """Offline: the C-extension wheels already in `out`, each checked against the SHA-256 the last build recorded."""
+    recorded = {Path(f["name"]).name: f["sha256"] for f in json.loads(manifest.read_text(encoding="utf-8"))["files"] if f["role"] == "c-extension"}
+    if not recorded:
+        raise SystemExit("--offline needs an earlier build: runner/runtime/manifest.json lists no C-extension wheels")
+    found = []
+    for name, digest in recorded.items():
+        target = out / name
+        if not target.exists() or sha256(target.read_bytes()) != digest:
+            raise SystemExit(f"{name} is missing or differs from manifest.json: build once without --offline")
+        found.append(target)
+    return found
+
+
 # ---- the funground wheel
 
 def package_files(root: Path, project: dict) -> list[Path]:
@@ -181,6 +195,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--funground", required=True, type=Path, help="a funground checkout (the branch to run in the browser)")
     parser.add_argument("--out", type=Path, default=REPO / "runner" / "runtime", help="default: runner/runtime")
+    parser.add_argument("--offline", action="store_true",
+                        help="do not download: keep the C-extension wheels already in the output folder (checked against manifest.json)")
     args = parser.parse_args()
     started = time.time()
     root, out = args.funground.resolve(), args.out.resolve()
@@ -192,7 +208,7 @@ def main() -> None:
     for old in wheels.glob("funground-*.whl"):
         old.unlink()
 
-    c_wheels = download_c_wheels(wheels)
+    c_wheels = keep_c_wheels(wheels, out / "manifest.json") if args.offline else download_c_wheels(wheels)
     fg_wheel = build_funground_wheel(root, wheels)
     count = copy_examples(root, examples)
 

@@ -8,6 +8,7 @@
 //     run    {source, filename, width, height, scale, files}   start the file; answers `started`
 //     step   {now}                          one display frame, `now` in seconds; answers `stepped`
 //     event  {kind, x, y, button, key, keyCode, delta}   one input event (funground's InputEvent vocabulary)
+//     microphone {samples}                  a Float32Array of mono samples (-1 to 1, 44 100 Hz) the microphone heard
 //
 //   worker -> page
 //     ready    {versions, timings, resources}   everything is installed and checked
@@ -16,6 +17,9 @@
 //     stepped  {running}                        the step is done; false when the sketch has ended
 //     output   {stream, text}                   one line of print() ("stdout") or of an error ("stderr")
 //     error    {message}                        the file or the setup failed (message is a Python traceback)
+//     sound    {command, voice, fields, samples} a sound command for Web Audio (funground/platform/browser_audio.py has the
+//                                               list); `samples` is a Float32Array whose buffer is transferred, for "load" only
+//     microphone {command}                      "start", "stop" or "close": the sketch wants the microphone listened to or let go
 //
 // There is no `stop` message: the page stops a run by terminating the worker, the only way to end a sketch that
 // never returns (`while True:`). A sketch that ends by itself finishes normally and says `stepped {running: false}`.
@@ -24,6 +28,12 @@
 // valid only during the call. We copy it once, into a fresh buffer, converting to the RGBA, straight-alpha bytes
 // that ImageData wants, and transfer that buffer. Converting here, not on the page, keeps the page's thread free,
 // and the copy has to happen anyway because the view dies when the call returns.
+//
+// Sound. funground makes every sound itself and keeps its own clock; the only thing it asks of a device is to play,
+// stop and pause a buffer (platform/browser_audio.py). Each such request leaves as a `sound` message; the page plays
+// the buffers with Web Audio (audio.js). A sound's samples travel once, with its first play. pygame is not loaded.
+// The microphone is the reverse: the page's AudioWorklet posts chunks, and they go into the ring buffer that the
+// desktop's microphone code fills, so level(), pitch() and the rest are unchanged.
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
@@ -33,11 +43,10 @@ const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide dist
 // download, so the decision is made from the source before it runs; a function missing here fails with "No module
 // named 'pygame'", which tools/check_on_demand.py catches. Why each group needs its packages:
 //   pictures: funground.imaging decodes and changes pictures with pygame-ce; Pillow does its filters faster.
-//   sound:    funground.sound opens pygame's mixer (silent here: the audio driver is "dummy", sound is S-137).
+//   sound:    none. Under the runner funground plays through the page (see Sound above), so no sound function needs
+//             pygame-ce. `spectrogram` is a picture (it makes one with load_pixels), so it is in the first group.
 const ON_DEMAND = [
-  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "get", "load_pixels", "update_pixels", "filter", "resize", "mask", "tint"] },
-  { packages: ["pygame-ce"], calls: ["load_sound", "create_sound", "tone", "note", "pluck", "melody", "sequence", "mix", "tala", "drone",
-    "microphone", "microphones", "draw_wave", "draw_spectrum", "spectrogram", "draw_pitch_line"] },
+  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "get", "load_pixels", "update_pixels", "filter", "resize", "mask", "tint", "spectrogram"] },
 ];
 
 function packagesFor(source) {
@@ -68,7 +77,7 @@ async function init({ runtimeUrl }) {
     indexURL: PYODIDE,
     stdout: output("stdout"),
     stderr: output("stderr"),
-    env: { SDL_VIDEODRIVER: "dummy", SDL_AUDIODRIVER: "dummy", FUNGROUND_HEADLESS: "1", PYGAME_HIDE_SUPPORT_PROMPT: "1" },
+    env: { SDL_VIDEODRIVER: "dummy", FUNGROUND_HEADLESS: "1", PYGAME_HIDE_SUPPORT_PROMPT: "1" },
   });
   lap("pyodide");
 
@@ -101,6 +110,13 @@ await micropip.install(funground_wheel, deps=False)
 // Python side of the worker: two small functions, kept here so that this file is the whole worker.
 const PYTHON_GLUE = `
 import importlib
+from array import array
+
+def push_microphone(session, chunk):
+    """Hand a Float32Array from the page to the session as an array of floats (to_bytes copies it once)."""
+    samples = array("f")
+    samples.frombytes(chunk.to_bytes())
+    session.push_microphone(samples)
 
 def check_real_libraries():
     """Nothing is stubbed: the three C libraries are compiled extension modules (.so), and funground imports them."""
@@ -130,7 +146,7 @@ async function run({ source, filename, width, height, scale, files }) {
   await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
-  session = Session(width, height, scale, postFrame);
+  session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest);
   try {
     session.start(source, filename);
   } catch (error) {
@@ -148,6 +164,10 @@ function step({ now }) {
     fail(error);
   }
   post({ type: "stepped", running });
+}
+
+function microphone({ samples }) {
+  if (session) py.globals.get("push_microphone")(session, samples);
 }
 
 function event({ kind, x, y, button, key, keyCode, delta }) {
@@ -198,9 +218,30 @@ function unpremultiply(v, a) {
   return (a << 24 | unscale(v & 0xff) << 16 | unscale((v >>> 8) & 0xff) << 8 | unscale((v >>> 16) & 0xff)) >>> 0;
 }
 
+// ---- sound and microphone
+
+// on_sound(command, voice, fields, samples) from funground. The arguments are Python proxies that die when the call
+// returns, so everything the page needs is copied out here: `fields` into an object, `samples` (float32, interleaved)
+// into a new buffer that is transferred.
+function postSound(command, voice, fields, samples) {
+  const message = { type: "sound", command, voice, fields: fields.toJs({ dict_converter: Object.fromEntries }), samples: null };
+  if (!samples) return post(message);
+  const view = samples.getBuffer();
+  try {
+    message.samples = new Float32Array(view.data);                 // a copy: the view dies when this call returns
+    post(message, [message.samples.buffer]);
+  } finally {
+    view.release();
+  }
+}
+
+function postMicrophoneRequest(command) {
+  post({ type: "microphone", command });
+}
+
 // ---- messages
 
-const handlers = { init, run, step, event };
+const handlers = { init, run, step, event, microphone };
 
 self.onmessage = async (e) => {
   try {

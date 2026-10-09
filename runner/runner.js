@@ -9,6 +9,8 @@
 // file only. When a run ends, or Stop terminates it, a fresh worker starts loading at once, so the next Run
 // finds Python ready (or nearly).
 
+import { createAudio } from "./audio.js";
+
 const KEY_NAMES = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", Enter: "enter", Escape: "escape" };
 const MOUSE_BUTTONS = ["left", "center", "right"];                 // MouseEvent.button 0, 1, 2
 const WHEEL_NOTCH = 100;                                          // deltaY pixels in one notch of a wheel
@@ -21,11 +23,19 @@ const WHEEL_NOTCH = 100;                                          // deltaY pixe
  * @param {boolean} [options.prewarm]  start the next run's worker as soon as a run ends (default true); false starts it at the next run(), which then waits for Python to load
  * @param {(count: number) => void} [options.onFrame]  after each frame is drawn (1 is the first of the run)
  * @param {(reason: "ended" | "error" | "stopped") => void} [options.onFinish]  when a run ends, however it ends
+ * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
  * @returns {Promise<{info: object, run: Function, stop: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onSound }) {
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
+  const audio = createAudio({
+    write,
+    workletUrl: new URL("microphone-worklet.js", baseUrl),
+    onChunk: (samples) => { if (run) worker.worker.postMessage({ type: "microphone", samples }, [samples.buffer]); },
+  });
+  // Browsers keep a page silent until the visitor has clicked or pressed a key on it: the first of either, and Run, unlock sound.
+  for (const kind of ["pointerdown", "keydown"]) window.addEventListener(kind, audio.unlock, { capture: true, passive: true });
   const workerUrl = new URL("worker.js", baseUrl);
   const runtimeUrl = new URL("runtime/", baseUrl).href;
   let worker = startWorker();            // the worker for the next run, or the run in progress
@@ -67,6 +77,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     if (!run) return;
     cancelAnimationFrame(run.animation);
     run.resolve({ ok: false });                                    // no effect when the run had started
+    audio.reset();                                                 // nothing keeps playing or listening
     run = null;
     replaceWorker();
     onFinish?.(reason);
@@ -79,6 +90,8 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       case "output": write(message.text, message.stream); break;
       case "error": write(message.message, "stderr"); finish("error"); break;
       case "frame": drawFrame(message); break;
+      case "sound": onSound?.(message); audio.command(message); break;
+      case "microphone": audio.microphoneCommand(message); break;
       case "started": started(message); break;
       case "stepped": if (run) { run.waiting = false; if (!message.running) finish("ended"); } break;
     }
@@ -109,6 +122,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   // ---- running
 
   async function runSketch(source, { filename = "sketch.py", files = {}, width, height } = {}) {
+    audio.unlock();                                                // Run is a click or a key: the moment the browser allows sound
     if (run) finish("stopped");
     worker ??= startWorker();
     await worker.ready;
@@ -161,6 +175,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     info,                                // what the first worker reported: library versions, load times, bytes fetched
     run: runSketch,
     stop: () => finish("stopped"),
+    audioState: () => audio.state(),     // sound unlocked? what each voice is doing? microphone open? (for tests and tools)
     get running() { return run !== null; },
   };
 }
