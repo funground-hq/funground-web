@@ -21,7 +21,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 </script>
 ```
 
-- `createRunner({canvas, output, baseUrl, prewarm, onFrame, onFinish})`. `baseUrl` is the folder holding
+- `createRunner({canvas, output, baseUrl, prewarm, onFrame, onFinish, onSound})`. `baseUrl` is the folder holding
   `worker.js` and `runtime/` (default: next to `runner.js`).
 - `run(source, {filename, files, width, height})`: `files` maps a path to bytes (`{"data/photo.jpg": Uint8Array}`),
   written beside the sketch before it starts. `width`/`height` are the canvas size `f.full_screen()` fills until
@@ -31,6 +31,8 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
   wheel and keyboard events on the canvas are sent in logical pixels; the canvas takes focus when clicked.
 - `stop()` terminates the worker (the sketch's `finish()` does not run). A sketch that ends by itself, or an error,
   ends the run normally. Either way a fresh worker starts loading at once (`prewarm: false` waits for the next `run`).
+- Sound and the microphone work with no setup (next section). `onSound(message)` sees each sound command (for tests
+  and tools); `runner.audioState()` says whether sound is unlocked and what each voice is doing.
 - `runner.info`: library versions, load times per stage and bytes fetched, as the first worker reported them.
 
 ## The runtime folder
@@ -43,8 +45,45 @@ header, so the site copies these at build time.
 It downloads the three C-extension wheels from the `funground-cairo-wasm` release (checked against its
 `SHA256SUMS.txt`), builds the funground wheel from the checkout, copies the examples, and writes `manifest.json`.
 Pyodide itself comes from jsDelivr; `fonttools` from the Pyodide distribution; `svgelements` and `pypdf` from PyPI
-through micropip. `pygame-ce` and `pillow` (Pyodide distribution) are loaded only for a sketch that calls a picture or
-sound function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps that list complete).
+through micropip. `pygame-ce` and `pillow` (Pyodide distribution) are loaded only for a sketch that calls a picture
+function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps that list complete). Sound does not need them.
+`build_runtime.py --offline` rebuilds the funground wheel and the examples without downloading, keeping the
+C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`).
+
+## Sound and the microphone (S-137)
+
+funground makes every sound in Python and keeps its own clock; the worker posts each sound's samples (once) and its
+play, pause, stop, volume and pan commands as `sound` messages, and `audio.js` plays them with Web Audio. pygame-ce is
+not loaded. Design and message list: `docs/design/Web_Runner_Note.md` in funground, "Sound and microphone".
+
+- A browser keeps a page silent until the visitor clicks or presses a key on it. `Run` is such a click, and the first
+  click or key on the page also unlocks sound. A sound a sketch starts before that is skipped, with one line in the
+  output (it is not an error), and is not started later.
+- The microphone is opened when the sketch calls `mic.start()`: the browser asks permission, `microphone-worklet.js`
+  (an AudioWorklet) posts chunks of 1024 mono samples, and the worker puts them into the ring buffer the desktop code
+  fills. Until you allow it, `level()` is 0 and `pitch()` is `None`. A refusal is one line in the output. The
+  microphone is never played back. Choosing a microphone by name (`f.microphone("USB")`) is desktop-only.
+- `f.load_sound()` reads 16-bit WAV files here; OGG and MP3 raise a `ValueError` that says so.
+
+### Try the sound (for a person, with ears)
+
+Serve the repository (`C:\Projects\playground\.venv\Scripts\python.exe -m http.server` from its root), open
+`/runner/demo.html` in Chrome and pick an example (the sound ones are in the list).
+
+1. `sound-02_write_a_tune`: press Run. You should hear a tune with a soft pad under it, starting at once, in tune and
+   without clicks. Press Stop: the sound must stop at once.
+2. `sound-03_sargam_over_a_drone`, `music-04_hear_a_raga`, `music-05_tala`: a drone or a tala that loops. Listen at
+   the loop point for a click or a gap (the desktop version has none), and for the tala's accent on the first beat.
+3. Left and right: in a sketch, `snd.pan(-1)` should come from the left speaker only, and `snd.pan(1)` from the right.
+4. `sound-04_tuner` (or `music-06_see_your_voice`): Chrome asks to use the microphone. Allow it, then sing or whistle a
+   steady note. The tuner should name your note, and the bar should move when you speak. Deny it once, to see the line
+   in the output (reset it with the icon in the address bar).
+5. Reload the page and press Run without clicking anywhere else first. Run is itself a click, so sound should play. To
+   see the "Sound is off" line, start a sketch from code that runs on load.
+
+Beyond that, listen for: a delay between a key press and its sound (Web Audio adds a few tens of milliseconds over the
+desktop); crackling while a sketch draws heavily (the worker makes the samples and the page plays them, so heavy
+drawing should not touch the audio); and a microphone that comes back out of the speakers (it must not).
 
 ## Demo, tests
 
@@ -52,6 +91,9 @@ sound function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps tha
 - `tools/test_runner.py --funground <checkout>`: headless Chrome, Session 1 and gallery examples against the goldens
   (byte for byte at 1x), Stop, errors, events. Reports in `tests/out/` (git-ignored). `--dpr 1.25` checks a fractional
   scale (size and not blank); `--limit 1 --skip-scenarios [--profile DIR]` measures first load.
+- `tools/test_sound.py --funground <checkout>`: sound and the microphone (S-137) in headless Chrome with a fake microphone:
+  the examples' sound commands against CPython's, audible output at the speakers, the fake microphone's level reaching
+  the sketch, and the skip-before-a-gesture line. Report in `tests/out/sound_report.json`.
 - Numbers and how they were measured: `RESULTS.md`.
 
 ## Frames
@@ -64,8 +106,8 @@ transfers the buffer. Converting in the worker keeps the page's thread free; the
 
 Measured results, criteria and noise caveats: `RESULTS.md`.
 
-- Sound and microphone are S-137: the mixer is not started (`pygame-ce` is loaded for a sketch that calls a sound
-  function, and plays nothing).
+- Sound and microphone: S-137, above. Nobody has listened yet (the tests check the samples and that the speakers get a
+  signal); the list above is for the maintainer.
 - **images-01 is not byte-identical to its golden** (50,454 pixels): Pyodide's JPEG decoder differs from the desktop
   one (PNG decodes identically). The other 14 of the 15 cases are byte-identical at 1x; at `--dpr 1.25` all 15 give a
   full, non-blank frame of the right size. A funground-side decision is needed (see RESULTS.md).

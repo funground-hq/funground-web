@@ -88,7 +88,8 @@
 import { createRunner } from "./runner.js";
 
 const FEATURED = ["session1-01_first_sketch", "session1-06_animation", "session1-08_mouse", "session1-09_keyboard",
-  "text-01_text", "paths-05_booleans", "basics-03_a_script", "images-01_load_image", "studios-03_rhythm", "animation-01_bounce"];
+  "text-01_text", "paths-05_booleans", "basics-03_a_script", "images-01_load_image", "studios-03_rhythm", "animation-01_bounce",
+  "sound-02_write_a_tune", "sound-03_sargam_over_a_drone", "music-05_tala", "sound-04_tuner"];
 const $ = (id) => document.getElementById(id);
 const root = new URL("runtime/examples/", import.meta.url);
 const index = (await (await fetch(new URL("index.json", root))).json()).filter((e) => FEATURED.includes(e.id));

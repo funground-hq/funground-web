@@ -97,3 +97,30 @@ would need Pillow only (1.03 MB) and pygame-ce (1.53 MB) would be needed for sou
 
 The last-but-one is the first-load run (twice with the same `--profile` for a warm one); `report.json` has
 `first_frame_ms`, the per-stage timings in `ready.timings` and the fetched bytes in `ready.resources`.
+
+## 4. Sound and the microphone (story S-137)
+
+Measured on 9 October 2026, same machine and Chrome as above; `tools/test_sound.py` (Chrome with
+`--autoplay-policy=no-user-gesture-required`, `--use-fake-device-for-media-stream`, `--use-fake-ui-for-media-stream`,
+own temporary profile).
+
+- **Samples.** For 7 gallery examples (sound-01, 02, 03, music-01, 04, 05, 11) the sounds the page received match what
+  CPython's `Session` made for the same file: the same count and the same frames in each (for example sound-02:
+  355,845 frames, twice), and at least as many plays. The unit tests (`tests/test_web_sound.py` in funground) go
+  further: the float samples the host receives equal pygame's 16-bit samples divided by 32768, for tone, square tone,
+  melody, sargam melody, raga drone and mix.
+- **Audible.** A tap on the speakers (an AnalyserNode on the destination) saw a peak of 0.50 to 0.68 for each of the 7
+  examples, and a voice was playing at the end of each.
+- **Microphone.** With Chrome's fake microphone, a sketch that only listens saw `level()` rise to 0.55 and `pitch()` of
+  about 400 Hz (the fake device's beep) within seconds; the gallery tuner ran with the microphone listening and no
+  error.
+- **Before a gesture.** With Chrome's default autoplay policy and no click, sound-02 ran with one output line ("Sound is
+  off until you click or press a key...") and no error.
+- **Download saved.** pygame-ce (1.53 MB compressed, section 3) is no longer loaded for a sketch that plays sound or
+  uses the microphone: 1.53 MB less to fetch. Section 3 measured about 1.2 s cold for pygame-ce and Pillow together, so
+  that is an upper bound on the time saved (pygame-ce alone was not timed). The funground wheel grew by about 5 KB
+  (2,727,330 to 2,732,325 bytes). A sketch that calls `f.spectrogram` still loads both packages (it makes a picture).
+- **Not measured:** latency from a call to the sound at the ear; a real microphone; any browser but Chrome; listening
+  quality. Those are the maintainer's (README, "Try the sound").
+
+How to repeat: `tools/build_runtime.py --funground <checkout> --offline`, then `tools/test_sound.py --funground <checkout>`.

@@ -1,0 +1,91 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>funground runner sound tests</title>
+<body>
+<canvas id="canvas" width="640" height="400"></canvas>
+<script type="module">
+// Driven by tools/test_sound.py (story S-137). Runs each case with the runner exactly as a site would, counts the
+// sound commands the sketch makes (the runner's onSound hook), asks the runner what its Web Audio voices are doing,
+// and posts one report. Chrome is started with --autoplay-policy=no-user-gesture-required (no click is possible in
+// a test) and a fake microphone.
+import { createRunner } from "/runner/runner.js";
+
+const canvas = document.getElementById("canvas");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const post = (path, body) => fetch(path, { method: "POST", body });
+const log = (text) => { console.log(text); return post("/log", text); };
+
+// A tap on the speakers: whatever is connected to a context's destination is also connected to an analyser, which
+// this page polls for the loudest sample it sees. It shows that Web Audio really produces sound (the graph is right),
+// without changing what is played.
+let peak = 0;
+const analysers = [];
+const connect = AudioNode.prototype.connect;
+AudioNode.prototype.connect = function (destination, ...rest) {
+  if (destination instanceof AudioDestinationNode && !analysers.some((a) => a.context === this.context)) {
+    const analyser = this.context.createAnalyser();
+    analyser.fftSize = 2048;
+    analysers.push(analyser);
+  }
+  const analyser = analysers.find((a) => a.context === this.context);
+  if (analyser && destination instanceof AudioDestinationNode) connect.call(this, analyser);
+  return connect.call(this, destination, ...rest);
+};
+setInterval(() => {
+  const data = new Float32Array(2048);
+  for (const analyser of analysers) {
+    analyser.getFloatTimeDomainData(data);
+    for (const v of data) peak = Math.max(peak, Math.abs(v));
+  }
+}, 20);
+
+const report = { cases: [] };
+let lines = [], frames = 0, finished = null, sounds = [];
+try {
+  const runner = await createRunner({
+    canvas,
+    baseUrl: new URL("/runner/", location.href),
+    output: (text, stream) => lines.push({ stream, text }),
+    onFrame: (n) => { frames = n; },
+    onFinish: (reason) => { finished = reason; },
+    onSound: (m) => sounds.push({ command: m.command, voice: m.voice, fields: m.fields, frames: m.samples ? m.samples.length / m.fields.channels : null,
+      peak: m.samples ? m.samples.reduce((peak, v) => Math.max(peak, Math.abs(v)), 0) : null }),
+  });
+  report.ready = runner.info;
+
+  for (const c of await (await fetch("/cases.json")).json()) {
+    const result = { id: c.id };
+    log(`case ${c.id}`);
+    frames = 0; finished = null; sounds = []; lines = []; peak = 0;
+    try {
+      const base = c.url.slice(0, c.url.lastIndexOf("/") + 1);
+      const files = {};
+      for (const name of c.files) files[name] = new Uint8Array(await (await fetch(base + name)).arrayBuffer());
+      const source = await (await fetch(c.url)).text();
+      const started = await runner.run("import funground\nfunground.random_seed(0)\n" + source, { filename: c.url.split("/").pop(), files, width: 640, height: 400 });
+      if (!started.ok) throw new Error(lines.map((l) => l.text).join("\n"));
+      const end = performance.now() + c.wait_s * 1000;
+      const done = () => (c.until_output ? lines.some((l) => new RegExp(c.until_output).test(l.text)) : frames >= c.frames);
+      while (!done() && finished === null && performance.now() < end) await sleep(50);
+      result.frames = frames;
+      result.reached = done();
+      result.finished = finished;
+      result.audio = runner.audioState();
+      result.sounds = sounds;
+      result.speaker_peak = peak;
+      result.output = lines.map((l) => `${l.stream}: ${l.text}`);
+    } catch (error) {
+      result.error = String(error.message ?? error);
+      result.output = lines.map((l) => `${l.stream}: ${l.text}`);
+    }
+    runner.stop();
+    report.cases.push(result);
+  }
+
+  // Sound before the first gesture: a context that is not running skips the sound, with one line (checked by hand
+  // with the real autoplay policy; here the policy is off, so this only checks that nothing throws).
+} catch (error) {
+  report.fatal = String(error.stack ?? error);
+}
+await post("/result", JSON.stringify(report));
+</script>

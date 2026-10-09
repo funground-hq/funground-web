@@ -28,7 +28,7 @@ session: sprints, stories, design notes, ADRs, decision log, sprint reviews, mod
 
 ## Layout
 
-- `runner/`: the browser runner (S-153). `worker.js` (Pyodide + funground in a module worker), `runner.js` (the
+- `runner/`: the browser runner (S-153, S-137). `worker.js` (Pyodide + funground in a module worker), `audio.js` and `microphone-worklet.js` (sound and microphone), `runner.js` (the
   page API), `demo.html`, `README.md` (how a page uses it). `runner/runtime/` is built, git-ignored.
 - `tools/build_runtime.py` fills `runner/runtime/` (wheels, examples, manifest); `tools/test_runner.py` tests the
   runner in headless Chrome; `tests/runner/test.html` is its page.
