@@ -14,6 +14,7 @@ import { createAudio } from "./audio.js";
 const KEY_NAMES = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", Enter: "enter", Escape: "escape" };
 const MOUSE_BUTTONS = ["left", "center", "right"];                 // MouseEvent.button 0, 1, 2
 const WHEEL_NOTCH = 100;                                          // deltaY pixels in one notch of a wheel
+const STOP_WAIT_MS = 250;                                         // with `reuse`: how long a run may take to stop before its worker is ended
 
 /**
  * @param {object} options
@@ -24,21 +25,35 @@ const WHEEL_NOTCH = 100;                                          // deltaY pixe
  * @param {(count: number) => void} [options.onFrame]  after each frame is drawn (1 is the first of the run)
  * @param {(reason: "ended" | "error" | "stopped") => void} [options.onFinish]  when a run ends, however it ends
  * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
+ * @param {string | URL} [options.pyodideUrl]  the folder Pyodide loads from (default: jsDelivr, in worker.js)
+ * @param {string | URL} [options.runtimeUrl]  the folder holding manifest.json and the wheels (default: runtime/ under baseUrl)
+ * @param {boolean} [options.spare]  while a sketch runs, keep the next run's worker loaded too, so that a re-run (an editor
+ *   re-running on every edit) starts at once instead of waiting for Python to load; costs a second Python's memory (default false)
+ * @param {boolean} [options.reuse]  run the next sketch in the same worker when the last one has ended or stops when asked
+ *   (funground's Session starts each sketch afresh); a sketch that does not stop within STOP_WAIT_MS (`while True:`) still
+ *   has its worker ended (D-083); default false (one worker per run, as before)
+ * @param {string} [options.microphoneRefusal]  for a host that does not allow the microphone (VS Code's panel): the line a sketch
+ *   that starts it gets in its output instead; the browser is not asked and the sketch hears nothing (default: none, the
+ *   microphone is asked for as usual)
  * @returns {Promise<{info: object, run: Function, stop: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onSound }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onSound, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null }) {
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
     write,
     workletUrl: new URL("microphone-worklet.js", baseUrl),
     onChunk: (samples) => { if (run) worker.worker.postMessage({ type: "microphone", samples }, [samples.buffer]); },
+    microphoneRefusal,
   });
   // Browsers keep a page silent until the visitor has clicked or pressed a key on it: the first of either, and Run, unlock sound.
   for (const kind of ["pointerdown", "keydown"]) window.addEventListener(kind, audio.unlock, { capture: true, passive: true });
   const workerUrl = new URL("worker.js", baseUrl);
-  const runtimeUrl = new URL("runtime/", baseUrl).href;
+  const workerScript = await workerScriptUrl(workerUrl);
+  const runtimeUrl = new URL(runtimeOption ?? "runtime/", baseUrl).href;
+  const pyodide = pyodideUrl === undefined ? undefined : new URL(pyodideUrl, baseUrl).href;
   let worker = startWorker();            // the worker for the next run, or the run in progress
+  let next = null;                       // with `spare`: the worker for the run after the one in progress
   let run = null;                        // the run in progress, or null
   let logical = { width: 0, height: 0 }; // the sketch's canvas in logical pixels
   let scale = 1;                         // backing pixels per logical pixel (devicePixelRatio when the run began)
@@ -50,37 +65,56 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   // ---- workers
 
   function startWorker() {
-    const created = new Worker(workerUrl, { type: "module" });
+    const created = new Worker(workerScript, { type: "module" });
     const slot = { worker: created, ready: null, loaded: false };
     slot.ready = new Promise((resolve, reject) => {
       created.onerror = (e) => reject(new Error(`the runner's worker failed to load: ${e.message}`));
       created.onmessage = (e) => {
         const message = e.data;
         if (message.type === "ready") { slot.loaded = true; console.debug("runner: worker ready"); resolve(message); }
+        else if (message.type === "stopped") slot.stopped?.();
         else if (message.type === "error" && !slot.loaded) reject(new Error(message.message));
         else handle(message);
       };
     });
     slot.ready.catch(() => {});                                    // reported where it is awaited
-    created.postMessage({ type: "init", runtimeUrl });
+    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide });
     console.debug("runner: worker started");
     return slot;
   }
 
-  // The worker is done with: end it, and start the next unless the page asked to wait. Messages still in flight from it are dropped.
+  // The worker is done with: end it, and take the spare or start the next unless the page asked to wait. Messages still in
+  // flight from it are dropped.
   function replaceWorker() {
     worker.worker.terminate();
-    worker = prewarm ? startWorker() : null;
+    worker = next ?? (prewarm ? startWorker() : null);
+    next = null;
   }
 
-  function finish(reason) {
+  // The run is over: nothing more is drawn or played. Its worker is ended (and replaced), or with `reuse` kept for the next
+  // run: a sketch that ended or failed has already been stopped by funground's Session.
+  function finish(reason, { keepWorker = reuse } = {}) {
     if (!run) return;
     cancelAnimationFrame(run.animation);
     run.resolve({ ok: false });                                    // no effect when the run had started
     audio.reset();                                                 // nothing keeps playing or listening
     run = null;
-    replaceWorker();
+    if (!keepWorker) replaceWorker();
     onFinish?.(reason);
+  }
+
+  // Stop the run in progress. Without `reuse` its worker is ended at once. With `reuse` the worker is asked to stop the
+  // sketch (its finish() runs); it is ended only if it does not answer in time, being busy in the sketch's own code.
+  async function stopRun() {
+    if (!run) return;
+    if (!reuse) return finish("stopped");
+    const slot = worker;
+    const answered = new Promise((resolve) => { slot.stopped = () => resolve(true); });
+    finish("stopped", { keepWorker: true });
+    slot.worker.postMessage({ type: "stop" });
+    const stopped = await Promise.race([answered, new Promise((resolve) => setTimeout(resolve, STOP_WAIT_MS, false))]);
+    slot.stopped = null;
+    if (!stopped && worker === slot) replaceWorker();
   }
 
   // ---- messages from the worker
@@ -89,8 +123,8 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     switch (message.type) {
       case "output": write(message.text, message.stream); break;
       case "error": write(message.message, "stderr"); finish("error"); break;
-      case "frame": drawFrame(message); break;
-      case "sound": onSound?.(message); audio.command(message); break;
+      case "frame": if (run) drawFrame(message); break;           // a stopped run's last frames are not drawn
+      case "sound": if (run) { onSound?.(message); audio.command(message); } break;
       case "microphone": audio.microphoneCommand(message); break;
       case "started": started(message); break;
       case "stepped": if (run) { run.waiting = false; if (!message.running) finish("ended"); } break;
@@ -115,15 +149,16 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     run.resolve({ ok: true, width, height });
+    if (spare && !next) next = startWorker();                     // after setup(), so the two do not compete for the first frame
     if (running) run.animation = requestAnimationFrame(tick);
     else finish("ended");
   }
 
   // ---- running
 
-  async function runSketch(source, { filename = "sketch.py", files = {}, width, height } = {}) {
+  async function runSketch(source, { filename = "sketch.py", files = {}, width, height, seed } = {}) {
     audio.unlock();                                                // Run is a click or a key: the moment the browser allows sound
-    if (run) finish("stopped");
+    if (run) await stopRun();
     worker ??= startWorker();
     await worker.ready;
     scale = window.devicePixelRatio || 1;
@@ -131,7 +166,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     frames = 0;
     return new Promise((resolve) => {
       run = { resolve, waiting: false, animation: 0 };
-      worker.worker.postMessage({ type: "run", source, filename, width: logical.width, height: logical.height, scale, files });
+      worker.worker.postMessage({ type: "run", source, filename, width: logical.width, height: logical.height, scale, files, seed });
     });
   }
 
@@ -174,10 +209,19 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   return {
     info,                                // what the first worker reported: library versions, load times, bytes fetched
     run: runSketch,
-    stop: () => finish("stopped"),
+    stop: stopRun,
     audioState: () => audio.state(),     // sound unlocked? what each voice is doing? microphone open? (for tests and tools)
     get running() { return run !== null; },
   };
+}
+
+// A worker must come from the page's own origin. When the runner's files are on another one (a VS Code webview loads
+// them from its resource origin), the script is fetched once and started from a blob: URL, which is the page's.
+async function workerScriptUrl(url) {
+  if (url.origin === location.origin) return url;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`the runner's worker could not be fetched: ${response.status} ${url}`);
+  return URL.createObjectURL(new Blob([await response.text()], { type: "text/javascript" }));
 }
 
 function keyFields(e) {
