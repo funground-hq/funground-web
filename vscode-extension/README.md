@@ -53,22 +53,31 @@ A normal copy for learners has no runtime inside (55 KB), so it loads from the w
 
 ## How learners get it
 
-For now the extension is carried by a sketchbook template, in `.vscode/extensions/funground/` (D-082); VS Code offers
-to install an extension it finds there. The template copies exactly the folder `build.py --template` writes:
+From the Visual Studio Marketplace, once it is published there (D-082; publishing needs the maintainer's
+publisher account). Two other routes were tried and do not work in github.dev or vscode.dev:
+
+- **Carried by the repository** in `.vscode/extensions/funground/`: the editor offers it and installs it, but
+  cannot load its code from the repository's file system ("Activating extension failed: Failed to fetch").
+- **Install Extension from Location with an address on our website**: vscode.dev's own Content Security Policy
+  lets the editor download an extension only from the Marketplace's servers and from `localhost`.
+
+`build.py --template` still writes the small folder (about 60 KB, no runtime inside: it loads from the website's
+`runtime/<version>/` folder) that a Marketplace package or a local install is made from.
+
+## Try it in github.dev or vscode.dev before it is published
+
+Serve the extension from this computer, where vscode.dev's policy allows it:
 
 ```
-package.json
-extension.js
-media/icon.svg
-media/preview.js
-media/preview.css
-media/runner/runner.js
-media/runner/worker.js
-media/runner/audio.js
-media/runner/microphone-worklet.js
+C:\Projects\playground\.venv\Scripts\python.exe vscode-extension\build.py --runtime site
+C:\Projects\playground\.venv\Scripts\python.exe vscode-extension\serve.py
 ```
 
-That is about 60 KB. No runtime is inside, so it loads from the website's `runtime/<version>/` folder.
+Then in github.dev (press `.` on a repository) or vscode.dev: **F1**, **Developer: Install Extension from
+Location...**, `http://localhost:5000/`. Chrome asks whether the page may reach devices on your local network:
+allow it (the panel fetches its own files from `localhost`). The browser keeps the extension; keep `serve.py`
+running while you use it, since its files are read from there. Checked on 11 October 2026 in the real vscode.dev:
+installs, loads Python from the website and draws the sketch.
 
 ## Build (Windows)
 
