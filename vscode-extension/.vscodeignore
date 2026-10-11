@@ -1,0 +1,13 @@
+# What vsce leaves out of the .vsix: everything but the extension itself (package.json, extension.js,
+# media/ with the runner's four scripts, the listing page, the changelog and the licence).
+# The runtime is never packaged: the extension loads it from the website (D-081).
+test/**
+build.py
+serve.py
+make_icon.py
+RESULTS.md
+README.md
+.gitignore
+media/runner/runtime/**
+media/runner/pyodide/**
+*.vsix

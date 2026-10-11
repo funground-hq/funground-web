@@ -64,6 +64,26 @@ publisher account). Two other routes were tried and do not work in github.dev or
 `build.py --template` still writes the small folder (about 60 KB, no runtime inside: it loads from the website's
 `runtime/<version>/` folder) that a Marketplace package or a local install is made from.
 
+## Publish to the Visual Studio Marketplace
+
+The publisher is `funground-hq` (created by the maintainer). Publishing is the maintainer's act.
+
+1. Build and package (vsce is a local devDependency in `test/`; `npm install` there once):
+
+   ```
+   C:\Projects\playground\.venv\Scripts\python.exe vscode-extension\build.py --runtime site
+   cd vscode-extension
+   node test\node_modules\@vscode\vsce\vsce package --readme-path LISTING.md --no-dependencies
+   ```
+
+   This writes `funground-<version>.vsix` (about 40 KB: the extension, its listing page `LISTING.md`, the
+   changelog, the licence and the icon; `.vscodeignore` keeps the rest out). The listing is `LISTING.md`,
+   written for learners; this README is for developers.
+2. At https://marketplace.visualstudio.com/manage, choose the publisher, **New extension**, **Visual Studio
+   Code**, and upload the `.vsix`. An update is **Update** on the extension's row, with a higher `version`
+   in `package.json`.
+3. The icon is `media/icon.png`, drawn by `make_icon.py` with funground (128 x 128).
+
 ## Try it in github.dev or vscode.dev before it is published
 
 Serve the extension from this computer, where vscode.dev's policy allows it:

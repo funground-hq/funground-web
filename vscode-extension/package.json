@@ -1,40 +1,109 @@
 {
   "name": "funground",
   "displayName": "funground",
-  "description": "Run a funground sketch beside the editor, in github.dev, vscode.dev and VS Code.",
+  "description": "Run your funground sketch beside your code in github.dev, vscode.dev and VS Code: edit, see it change, save to GitHub.",
   "version": "0.1.0",
   "publisher": "funground-hq",
   "license": "LGPL-2.1-only",
-  "private": true,
+  "icon": "media/icon.png",
+  "homepage": "https://funground-hq.github.io",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/funground-hq/funground-web"
+  },
+  "bugs": {
+    "url": "https://github.com/funground-hq/funground-web/issues"
+  },
+  "keywords": [
+    "funground",
+    "creative coding",
+    "python",
+    "sketch",
+    "learning",
+    "github.dev"
+  ],
+  "galleryBanner": {
+    "color": "#00897b",
+    "theme": "dark"
+  },
   "fungroundRuntime": "0.2-dev",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Education", "Visualization"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Education",
+    "Visualization"
+  ],
   "browser": "./extension.js",
-  "activationEvents": ["onLanguage:python"],
+  "activationEvents": [
+    "onLanguage:python"
+  ],
   "capabilities": {
-    "untrustedWorkspaces": { "supported": true, "description": "Sketches run only in the preview panel's own sandboxed origin, never with the editor's rights." },
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "Sketches run only in the preview panel's own sandboxed origin, never with the editor's rights."
+    },
     "virtualWorkspaces": true
   },
   "contributes": {
     "commands": [
-      { "command": "funground.run", "title": "Run", "category": "funground", "icon": "$(play)" },
-      { "command": "funground.stop", "title": "Stop", "category": "funground", "icon": "$(debug-stop)" }
+      {
+        "command": "funground.run",
+        "title": "Run",
+        "category": "funground",
+        "icon": "$(play)"
+      },
+      {
+        "command": "funground.stop",
+        "title": "Stop",
+        "category": "funground",
+        "icon": "$(debug-stop)"
+      }
     ],
     "menus": {
       "editor/title": [
-        { "command": "funground.run", "when": "editorLangId == python", "group": "navigation" }
+        {
+          "command": "funground.run",
+          "when": "editorLangId == python",
+          "group": "navigation"
+        }
       ]
     },
     "keybindings": [
-      { "command": "funground.run", "key": "ctrl+enter", "mac": "cmd+enter", "when": "editorTextFocus && editorLangId == python" }
+      {
+        "command": "funground.run",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == python"
+      }
     ],
     "configuration": {
       "title": "funground",
       "properties": {
-        "funground.autoRun": { "type": "boolean", "default": true, "description": "Run the sketch again a moment after you stop typing (and whenever you save)." },
-        "funground.autoRunDelay": { "type": "number", "default": 400, "minimum": 100, "description": "Milliseconds to wait after the last change before running again." },
-        "funground.runtimeUrl": { "type": "string", "default": "", "description": "Where Python and funground load from. If this is empty, the copy inside the extension is used when the extension has one; otherwise the funground website (https://funground-hq.github.io/runtime/, in the folder for the version this extension was made for). Set it to another folder (https://.../) holding pyodide/ and runtime/, served with CORS, to load from there instead." },
-        "funground.randomSeed": { "type": ["number", "null"], "default": null, "description": "Seed the random numbers before each run, so every run draws the same (as funground's tests do). Empty: different each run." }
+        "funground.autoRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the sketch again a moment after you stop typing (and whenever you save)."
+        },
+        "funground.autoRunDelay": {
+          "type": "number",
+          "default": 400,
+          "minimum": 100,
+          "description": "Milliseconds to wait after the last change before running again."
+        },
+        "funground.runtimeUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Where Python and funground load from. If this is empty, the copy inside the extension is used when the extension has one; otherwise the funground website (https://funground-hq.github.io/runtime/, in the folder for the version this extension was made for). Set it to another folder (https://.../) holding pyodide/ and runtime/, served with CORS, to load from there instead."
+        },
+        "funground.randomSeed": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "description": "Seed the random numbers before each run, so every run draws the same (as funground's tests do). Empty: different each run."
+        }
       }
     }
   }
