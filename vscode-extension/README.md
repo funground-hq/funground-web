@@ -69,7 +69,7 @@ publisher account). Two other routes were tried and do not work in github.dev or
 Serve the extension from this computer, where vscode.dev's policy allows it:
 
 ```
-C:\Projects\playground\.venv\Scripts\python.exe vscode-extensionuild.py --runtime site
+C:\Projects\playground\.venv\Scripts\python.exe vscode-extension\build.py --runtime site
 C:\Projects\playground\.venv\Scripts\python.exe vscode-extension\serve.py
 ```
 
