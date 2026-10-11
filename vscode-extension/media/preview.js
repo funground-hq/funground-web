@@ -45,7 +45,7 @@ export async function start({ runner: runnerBase, pyodide, runtime, where }) {
         if (count === 1 || count === SNAPSHOT_FRAME) active.snapshots[count] = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
         active.frames = count;
       },
-      onFinish: (reason) => { if (active) { active.finished = reason; status.textContent = reason === "error" ? "Stopped: error" : "Stopped"; } },
+      onFinish: (reason) => { if (active) { active.finished = reason; status.textContent = { ended: "Finished", error: "Stopped by an error", stopped: "Stopped" }[reason] ?? reason; } },
       onSound: (message) => { if (active) active.sounds.push({ command: message.command, voice: message.voice, frames: message.samples ? message.samples.length / 2 : 0 }); },
     });
   } catch (error) {
