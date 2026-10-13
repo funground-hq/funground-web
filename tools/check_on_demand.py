@@ -8,7 +8,8 @@ imports a funground module that imports pygame (`imaging`). This script finds th
 reading its source (no import, so no pygame is needed) and fails if one is missing from the table. Sound and the
 microphone need no pygame under the runner (S-137: funground plays through the page), so `sound`, `sound_views` and
 `microphone_input` are not on the list; tests/test_web_sound.py in funground checks that a Session imports no
-pygame. Two names reach `imaging` indirectly and are in the table by hand: `tint` (from the renderer) and
+pygame. A public function in api.py that calls one of those methods on the sketch under another name (`apply_filter`)
+is found too. Two names reach `imaging` indirectly and are in the table by hand: `tint` (from the renderer) and
 `spectrogram` (which makes its picture with load_pixels).
 """
 from __future__ import annotations
@@ -33,6 +34,28 @@ def functions_needing_pygame(package: Path) -> dict[str, str]:
             for inner in ast.walk(node):
                 if isinstance(inner, ast.ImportFrom) and imported_modules(inner) & USES_PYGAME:
                     found[node.name] = path.relative_to(package).as_posix()
+    found.update(api_wrappers(package / "api.py", set(found)))
+    return found
+
+
+SKETCH_ACCESSORS = {"active_sketch", "canvas_sketch"}      # how api.py reaches the running sketch
+
+
+def api_wrappers(api: Path, methods: set[str]) -> dict[str, str]:
+    """Public functions in api.py that call one of *methods* on the sketch under another name.
+
+    `apply_filter` (the name for `filter` in the shorter style) calls `active_sketch().filter(...)`: it imports
+    nothing itself, so the import search above does not see it, yet it needs pygame just the same.
+    """
+    found: dict[str, str] = {}
+    for node in ast.parse(api.read_text(encoding="utf-8")).body:
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("_") or node.name in methods:
+            continue
+        for inner in ast.walk(node):
+            if (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute) and inner.func.attr in methods
+                    and isinstance(inner.func.value, ast.Call) and isinstance(inner.func.value.func, ast.Name)
+                    and inner.func.value.func.id in SKETCH_ACCESSORS):
+                found[node.name] = "api.py"
     return found
 
 

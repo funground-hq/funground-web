@@ -50,7 +50,7 @@ const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide dist
 //   sound:    none. Under the runner funground plays through the page (see Sound above), so no sound function needs
 //             pygame-ce. `spectrogram` is a picture (it makes one with load_pixels), so it is in the first group.
 const ON_DEMAND = [
-  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "get", "load_pixels", "update_pixels", "filter", "resize", "mask", "tint", "spectrogram"] },
+  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "get", "load_pixels", "update_pixels", "filter", "apply_filter", "resize", "mask", "tint", "spectrogram"] },
 ];
 
 function packagesFor(source) {
