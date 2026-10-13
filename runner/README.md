@@ -41,7 +41,8 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 |---|---|---|
 | `pyodideUrl` | jsDelivr (in `worker.js`) | The folder Pyodide loads from. |
 | `runtimeUrl` | `runtime/` under `baseUrl` | The folder holding `manifest.json` and the wheels. A manifest entry with role `dependency` is installed from there instead of PyPI. |
-| `reuse` (D-083) | `false` | Run the next sketch in the same worker (the same Python) when the last one has ended, or stops when asked: a re-run takes about 0.1 s instead of loading Python again. funground's `Session` starts each sketch afresh. A sketch that does not stop within 250 ms (`while True:`) still has its worker ended. |
+| `reuse` (D-083) | `false` | Run the next sketch in the same worker (the same Python) when the last one has ended, or stops when asked: a re-run takes about 0.1 s instead of loading Python again. funground's `Session` starts each sketch afresh. A sketch that does not stop within a second (`while True:`, or a long `setup()`) still has its worker ended, and a new Python loads (seconds). |
+| `onRestart` | none | With `reuse`: called when that happens, so the page can say why the next run waits. |
 | `spare` | `false` | While a sketch runs, keep the next run's worker loaded too, so that a re-run starts at once. Costs a second Python's memory. Not needed with `reuse`. |
 | `microphoneRefusal` | none | For a host that does not allow the microphone (VS Code's panel): the line a sketch that calls `mic.start()` gets in its output instead. The browser is not asked, and the sketch hears nothing (as after a refusal). |
 | `run(source, {seed})` | none | Seed funground's random numbers for this run, so every run draws the same (tests compare frames with goldens). It is applied to the run's own sketch, after funground's `Session` is made. |
