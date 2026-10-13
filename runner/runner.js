@@ -14,7 +14,9 @@ import { createAudio } from "./audio.js";
 const KEY_NAMES = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", Enter: "enter", Escape: "escape" };
 const MOUSE_BUTTONS = ["left", "center", "right"];                 // MouseEvent.button 0, 1, 2
 const WHEEL_NOTCH = 100;                                          // deltaY pixels in one notch of a wheel
-const STOP_WAIT_MS = 250;                                         // with `reuse`: how long a run may take to stop before its worker is ended
+// With `reuse`: how long a run may take to stop before its worker is ended and a new Python started. A sketch answers
+// between two frames, so a busy frame or a slow setup() needs more than a moment; a new Python costs seconds.
+const STOP_WAIT_MS = 1000;
 
 /**
  * @param {object} options
@@ -24,6 +26,8 @@ const STOP_WAIT_MS = 250;                                         // with `reuse
  * @param {boolean} [options.prewarm]  start the next run's worker as soon as a run ends (default true); false starts it at the next run(), which then waits for Python to load
  * @param {(count: number) => void} [options.onFrame]  after each frame is drawn (1 is the first of the run)
  * @param {(reason: "ended" | "error" | "stopped") => void} [options.onFinish]  when a run ends, however it ends
+ * @param {() => void} [options.onRestart]  with `reuse`: a run did not stop within STOP_WAIT_MS, so its worker was ended and a
+ *   new one (a new Python) is loading; the next run waits for it, which takes seconds. A page can say so
  * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
  * @param {string | URL} [options.pyodideUrl]  the folder Pyodide loads from (default: jsDelivr, in worker.js)
  * @param {string | URL} [options.runtimeUrl]  the folder holding manifest.json and the wheels (default: runtime/ under baseUrl)
@@ -37,7 +41,7 @@ const STOP_WAIT_MS = 250;                                         // with `reuse
  *   microphone is asked for as usual)
  * @returns {Promise<{info: object, run: Function, stop: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onSound, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null }) {
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
@@ -114,7 +118,10 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     slot.worker.postMessage({ type: "stop" });
     const stopped = await Promise.race([answered, new Promise((resolve) => setTimeout(resolve, STOP_WAIT_MS, false))]);
     slot.stopped = null;
-    if (!stopped && worker === slot) replaceWorker();
+    if (!stopped && worker === slot) {
+      replaceWorker();
+      onRestart?.();
+    }
   }
 
   // ---- messages from the worker
