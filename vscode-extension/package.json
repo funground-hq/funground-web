@@ -2,7 +2,7 @@
   "name": "funground",
   "displayName": "funground",
   "description": "Run your funground sketch beside your code in github.dev, vscode.dev and VS Code: edit, see it change, save to GitHub.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "funground-hq",
   "license": "LGPL-2.1-only",
   "icon": "media/icon.png",
@@ -95,6 +95,11 @@
           "type": "string",
           "default": "",
           "description": "Where Python and funground load from. If this is empty, the copy inside the extension is used when the extension has one; otherwise the funground website (https://funground-hq.github.io/runtime/, in the folder for the version this extension was made for). Set it to another folder (https://.../) holding pyodide/ and runtime/, served with CORS, to load from there instead."
+        },
+        "funground.suggestions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Suggest funground's names, colours and option words while you type, with hover and signature hints. Turn this off if your editor already knows funground (for example funground is installed for Pylance)."
         },
         "funground.randomSeed": {
           "type": [
