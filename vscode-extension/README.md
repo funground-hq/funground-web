@@ -12,6 +12,26 @@ call (`f.run()` animates, `f.show()` draws once). Opening a helper such as `pale
 in the panel, and changing the helper runs that sketch again. **funground: Run** runs whatever Python file is open,
 for a script that only saves a file.
 
+## Suggestions
+
+The extension also suggests funground's names while you type (story S-205). In github.dev and vscode.dev there is no
+Python environment and Pylance reads one file only, so nothing else could. It works from `media/completions.json`,
+funground's own list of names, signatures, summaries, colours and option words. `tools/build_runtime.py` copies it from
+the funground checkout (as `runner/runtime/completions.json`, role `completions` in `manifest.json`) and `build.py`
+copies it from there into `media/` (about 177 KB), so the suggestions always match the funground the runtime runs.
+
+- after `f.` (the alias in `import funground as ...`): every name, with its signature, summary and a Reference link;
+  bare names after `from funground import *`;
+- `f.COLORS.` (colours, with a swatch), `f.CONSTANTS.` (the groups, "for text_align"), `f.CONSTANTS.ALIGN.` (words);
+- inside the quotes of a colour parameter (`f.fill("`) the colour names; of an option parameter (`f.blend_mode("`) the words;
+- hover on a name, and signature help after `(` and `,` with the parameter you are on.
+
+All of it is in `extension.js` (`makeSuggestions`): VS Code for the web loads an extension's `browser` file alone, so it
+cannot `require` a second file. A call is found by reading the code back from the cursor (30 lines at most), skipping
+strings, comments and brackets. Limits: it only knows the names the file reaches through the `funground` import (not
+`g = f`), and on a computer where Pylance has funground installed the names appear twice: set `funground.suggestions`
+off there. `test/suggestions_test.mjs` tests it against a stand-in for the VS Code API (no editor needed).
+
 ## How it works
 
 ```
@@ -40,7 +60,7 @@ Python (Pyodide) and funground's wheels are the runtime. The extension looks for
 3. the funground website: `https://funground-hq.github.io/runtime/<version>/`, where `<version>` is
    `fungroundRuntime` in `package.json`.
 
-A normal copy for learners has no runtime inside (55 KB), so it loads from the website.
+A normal copy for learners has no runtime inside (about 64 KB), so it loads from the website.
 
 ## Settings
 
@@ -49,6 +69,7 @@ A normal copy for learners has no runtime inside (55 KB), so it loads from the w
 | `funground.autoRun` | on | Run again after you stop typing, and on save. |
 | `funground.autoRunDelay` | 400 | Milliseconds to wait after the last change. |
 | `funground.runtimeUrl` | empty | Where the runtime loads from (above). |
+| `funground.suggestions` | on | Suggest funground's names, colours and option words, with hover and signature hints. |
 | `funground.randomSeed` | none | Seed the random numbers before each run, so every run draws the same. |
 
 ## How learners get it
@@ -76,7 +97,7 @@ The publisher is `funground-hq` (created by the maintainer). Publishing is the m
    node test\node_modules\@vscode\vsce\vsce package --readme-path LISTING.md --no-dependencies
    ```
 
-   This writes `funground-<version>.vsix` (about 40 KB: the extension, its listing page `LISTING.md`, the
+   This writes `funground-<version>.vsix` (about 64 KB: the extension, its listing page `LISTING.md`, the
    changelog, the licence and the icon; `.vscodeignore` keeps the rest out). The listing is `LISTING.md`,
    written for learners; this README is for developers.
 2. At https://marketplace.visualstudio.com/manage, choose the publisher, **New extension**, **Visual Studio
@@ -117,6 +138,8 @@ C:\Projects\playground\.venv\Scripts\python.exe vscode-extension\build.py [optio
 | `--vsix` | `funground-<version>.vsix` beside `build.py`. |
 | `--pyodide DIR` | Use an unpacked Pyodide 314.0.7 instead of downloading it from jsDelivr (a `--site` folder's `pyodide/` will do). |
 
+Every build also copies `runner/runtime/completions.json` into `media/` (git-ignored), checked against the manifest.
+
 ## Test (Windows)
 
 Needs Node 22 and the Chrome in `C:\Users\samirj\AppData\Local\Google\Chrome\Application\`. Nothing is installed
@@ -125,6 +148,7 @@ globally and no browser is downloaded.
 ```
 cd vscode-extension\test
 npm install --ignore-scripts
+node suggestions_test.mjs                      # the suggestions, against a stand-in for the VS Code API; needs media/completions.json
 node run_tests.mjs --runtime bundled|site:<folder made by build.py --site>|published:<the same> [--label NAME]
 C:\Projects\playground\.venv\Scripts\python.exe compare.py --funground C:\Projects\playground-0.2 out\NAME
 ```
