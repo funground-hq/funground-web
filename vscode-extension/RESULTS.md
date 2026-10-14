@@ -92,3 +92,15 @@ C:\Projects\playground\.venv\Scripts\python.exe compare.py --funground C:\Projec
 
 For `bundled`: `build.py --runtime bundled --pyodide vscode-extension\test\out\runtime-site\pyodide`, then
 `node run_tests.mjs --runtime bundled`. For `published`: build with `--runtime site`, then `--runtime published:out/runtime-site`.
+
+## Suggestions (story S-205, 15 October 2026)
+
+- `node test/suggestions_test.mjs`: 13 tests pass against a stand-in for the VS Code API, with the real `media/completions.json`
+  (funground 0.2.0.dev0, 177,116 bytes, 205 names, 665 colours): `f.` lists the names with signatures, `f.COLORS.TOM` finds
+  TOMATO (a colour item with its hex), `f.CONSTANTS.ALIGN.` lists CENTER, `f.fill("` the 665 colours, `f.blend_mode("` its
+  modes, hover and signature help work on `circle`, and the `funground.suggestions` setting turns it all off.
+- `run_tests.mjs --runtime site:...` (VS Code for the web 1.141.0, headless Chrome) still passes: the extension activates with the
+  suggestions in place and every case runs as before.
+- `.vsix`: 39,824 bytes (0.1.0) before, 64,385 bytes (0.2.0) after; `completions.json` is 177,116 bytes unpacked and
+  26,854 bytes in the zip.
+- Not checked: the suggestions in a real github.dev or vscode.dev (the maintainer's check P1 of spike 13).

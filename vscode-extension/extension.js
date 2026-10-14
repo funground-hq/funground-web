@@ -7,6 +7,8 @@
 // the files in the data/ folder (f.load_image("data/photo.png")) and the other .py files in its folder (import helpers).
 // In github.dev the files are the repository's.
 //
+// It also suggests funground's names, colours and option words, and shows hints (see "Suggestions" below).
+//
 // Safety: the sketch runs only inside the webview, which has its own origin and a strict Content Security Policy (one
 // exception, D-080, at previewHtml); this file never runs sketch code. A "browser" entry point: no Node APIs.
 
@@ -42,7 +44,7 @@ function activate(context) {
     vscode.workspace.onDidSaveTextDocument((document) => {
       if (panel && feedsRun(document)) schedule(0, "save");
     }),
-  );
+  );  return startSuggestions(context);                // a promise: activation ends when the suggestions are in place (or skipped)
 }
 
 function deactivate() {}
@@ -283,4 +285,268 @@ start(${JSON.stringify(config)});
 </html>`;
 }
 
-module.exports = { activate, deactivate };
+// ---- Suggestions (story S-205, from spike 13, route B)
+//
+// In github.dev and vscode.dev there is no Python environment, and Pylance reads one file only, so nothing there knows what
+// funground offers. This extension supplies it from media/completions.json: funground's own list of its names, signatures,
+// summaries, colours and option words, copied in by build.py from the funground the runtime runs (so the two always match).
+// What it offers: names after `f.` (and bare, after `from funground import *`); the colours inside `f.COLORS.` and the
+// words inside `f.CONSTANTS.` and `f.CONSTANTS.GROUP.`; colour names inside the quotes of a colour parameter
+// (f.fill("...")) and option words inside the quotes of an option parameter (f.blend_mode("...")); hover; signature help.
+// This is one file on purpose: VS Code for the web loads an extension's "browser" file alone, so it cannot require a sibling.
+
+const DOCS = "https://funground-hq.github.io/";                 // an entry's `url` is "reference/API.md#fn-circle"
+const KIND = { function: "Function", class: "Class", value: "Variable", namespace: "Module" };
+const SCAN_LINES = 30;                                           // how far back a call can start, for signature help and quotes
+
+async function startSuggestions(context) {
+  let data;
+  try {
+    const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(context.extensionUri, "media", "completions.json"));
+    data = JSON.parse(new TextDecoder().decode(bytes));
+  } catch (error) {
+    output.appendLine(`suggestions not available: ${error.message}`);
+    return;
+  }
+  registerSuggestions(context, data);
+  output.appendLine(`suggestions for funground ${data.version}: ${data.names.length} names, ${data.colors.length} colours`);
+}
+
+function registerSuggestions(context, data) {
+  const s = makeSuggestions(data);
+  const enabled = () => setting("suggestions") !== false;
+  const python = { language: "python" };
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider(python, { provideCompletionItems: (d, p, t, c) => (enabled() ? s.complete(d, p, c) : undefined) }, ".", '"', "'"),
+    vscode.languages.registerHoverProvider(python, { provideHover: (d, p) => (enabled() ? s.hover(d, p) : undefined) }),
+    vscode.languages.registerSignatureHelpProvider(python, { provideSignatureHelp: (d, p) => (enabled() ? s.signature(d, p) : undefined) }, { triggerCharacters: ["(", ","], retriggerCharacters: [","] }),
+  );
+}
+
+// The logic, apart from registering it, so a test can call it with a stand-in for the editor.
+function makeSuggestions(data) {
+  const byName = new Map(data.names.map((n) => [n.name, n]));
+  const colorParams = new Map();                                  // "fill" -> Set("color")
+  for (const { function: fn, parameter } of data.color_params) {
+    if (!colorParams.has(fn)) colorParams.set(fn, new Set());
+    colorParams.get(fn).add(parameter);
+  }
+  const markdown = (text) => text.replace(/``([^`]+)``/g, "`$1`");                         // the summaries use reST double backticks
+  const link = (n) => `[Reference](${DOCS}${n.url.replace(".md#", "/#")})`;
+  const kindOf = (n) => vscode.CompletionItemKind[KIND[n.kind] ?? "Function"];
+  const imports = new Map();                                      // document uri -> {version, alias, star}
+
+  // How this file imports funground: `import funground as f` gives "f"; `from funground import *` allows bare names.
+  function importsOf(document) {
+    const key = document.uri?.toString() ?? "";
+    const known = imports.get(key);
+    if (known && known.version === document.version) return known;
+    const text = document.getText();
+    const alias = /^\s*import\s+funground\s+as\s+(\w+)/m.exec(text)?.[1] ?? (/^\s*import\s+funground\s*$/m.test(text) ? "funground" : null);
+    const found = { version: document.version, alias, star: /^\s*from\s+funground\s+import\s+\*/m.test(text) };
+    imports.set(key, found);
+    return found;
+  }
+
+  // The code before the cursor (a few lines of it), read once for strings, comments and open calls.
+  function scanBefore(document, position) {
+    const from = new vscode.Position(Math.max(0, position.line - SCAN_LINES), 0);
+    return scan(document.getText(new vscode.Range(from, position)));
+  }
+
+  // The funground entry for a call's name, or null: `f.circle(` with the alias, or `circle(` after a star import.
+  function entryOf(chain, { alias, star }) {
+    if (!chain) return null;
+    const name = chain.length === 2 && chain[0] === alias ? chain[1] : chain.length === 1 && star ? chain[0] : null;
+    return name ? byName.get(name) ?? null : null;
+  }
+
+  const colorItem = (name, value, hex) => {
+    const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Color);
+    item.detail = value === undefined ? hex : `"${value}"  ${hex}`;
+    item.documentation = hex;                                     // a colour string as the documentation is what shows the swatch
+    return item;
+  };
+
+  // The meaning of an option word, from the functions that take the group.
+  const meaningOf = (word, functions) => {
+    for (const fn of functions) {
+      for (const options of Object.values(byName.get(fn)?.options ?? {})) {
+        const found = options.find((o) => o.word === word);
+        if (found) return found.meaning;
+      }
+    }
+    return undefined;
+  };
+
+  function complete(document, position, context) {
+    const here = scanBefore(document, position);
+    if (here.comment) return undefined;
+    const line = document.lineAt(position.line).text;
+    const before = line.slice(0, position.character);
+    const imported = importsOf(document);
+    if (here.string) return completeInString(here, imported);
+
+    const dotted = /([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.(\w*)$/.exec(before);
+    if (dotted) return completeAfterDot(dotted[1].split("."), imported, line.slice(position.character));
+    const bare = /(?:^|[^\w.])(\w*)$/.exec(before);
+    const typed = bare?.[1] ?? "";
+    const invoked = context?.triggerKind === vscode.CompletionTriggerKind?.Invoke;
+    if (!imported.star || !bare || (!typed && !invoked) || /\b(?:def|class|import|from)\s+\w*$/.test(before)) return undefined;
+    return data.names.filter((n) => n.star).map((n) => nameItem(n, line.slice(position.character)));
+  }
+
+  function nameItem(n, after) {
+    const item = new vscode.CompletionItem(n.name, kindOf(n));
+    item.detail = n.kind === "function" || n.kind === "class" ? n.signature : n.kind === "value" ? `${n.name}: ${n.detail}` : n.detail;
+    item.documentation = new vscode.MarkdownString(`${markdown(n.summary)}\n\n${link(n)}`);
+    if (n.kind === "function" && !after.startsWith("(")) {
+      item.insertText = new vscode.SnippetString(`${n.name}($0)`);
+      item.command = { command: "editor.action.triggerParameterHints", title: "Parameter hints" };
+    }
+    return item;
+  }
+
+  function completeAfterDot(chain, { alias, star }, after) {
+    let rest;
+    if (alias && chain[0] === alias) rest = chain.slice(1);
+    else if (star && (chain[0] === "COLORS" || chain[0] === "CONSTANTS")) rest = chain;
+    else return undefined;
+    if (rest.length === 0) return data.names.map((n) => nameItem(n, after));
+    const space = byName.get(rest[0]);
+    if (space?.kind !== "namespace") return undefined;
+    if (rest[0] === "COLORS" && rest.length === 1) return space.members.map((m) => colorItem(m.name, m.value, m.hex));
+    if (rest[0] === "CONSTANTS" && rest.length === 1) {
+      return space.members.map((g) => {
+        const item = new vscode.CompletionItem(g.name, vscode.CompletionItemKind.Enum);
+        item.detail = `for ${g.used_by.join(", ")}`;
+        return item;
+      });
+    }
+    if (rest[0] === "CONSTANTS" && rest.length === 2) {
+      const group = space.members.find((g) => g.name === rest[1]);
+      return group?.members.map((m) => {
+        const item = new vscode.CompletionItem(m.name, vscode.CompletionItemKind.EnumMember);
+        item.detail = `"${m.value}"`;
+        const meaning = meaningOf(m.value, group.used_by);
+        if (meaning) item.documentation = new vscode.MarkdownString(markdown(meaning));
+        return item;
+      });
+    }
+    return undefined;
+  }
+
+  // Inside the quotes of an argument: colour names for a colour parameter, option words for an option parameter.
+  function completeInString(here, imported) {
+    const frame = here.stack[here.stack.length - 1];
+    const entry = frame?.open === "(" ? entryOf(frame.callee, imported) : null;
+    if (!entry) return undefined;
+    const param = parameterAt(entry, frame, here.text.slice(frame.argStart, here.string.start));
+    const items = [];
+    if (colorParams.get(entry.name)?.has(param)) for (const c of data.colors) items.push(colorItem(c.name, undefined, c.hex));
+    for (const o of entry.options?.[param] ?? []) {
+      const item = new vscode.CompletionItem(o.word, vscode.CompletionItemKind.EnumMember);
+      item.documentation = new vscode.MarkdownString(markdown(o.meaning));
+      items.push(item);
+    }
+    return items.length ? items : undefined;
+  }
+
+  const bareName = (parameter) => parameter.replace(/^\*+/, "").split("=")[0].trim();
+
+  // The parameter an argument belongs to: the name before `=`, else its place in the call.
+  function parameterAt(entry, frame, argText) {
+    const keyword = /^\s*([A-Za-z_]\w*)\s*=\s*$/.exec(argText);
+    return keyword ? keyword[1] : parameters(entry).map(bareName)[frame.commas];
+  }
+
+  function hover(document, position) {
+    const range = document.getWordRangeAtPosition(position);
+    if (!range) return undefined;
+    const imported = importsOf(document);
+    const line = document.lineAt(position.line).text;
+    const lead = line.slice(0, range.start.character);
+    const qualified = imported.alias && lead.endsWith(`${imported.alias}.`);
+    const bare = imported.star && !/\.\s*$/.test(lead);
+    const n = byName.get(document.getText(range));
+    if (!n || !(qualified || bare)) return undefined;
+    const text = new vscode.MarkdownString().appendCodeblock(n.kind === "value" ? `${n.name}: ${n.detail}` : n.signature, "python");
+    text.appendMarkdown(`\n${markdown(n.summary)}\n\n${link(n)}`);
+    return new vscode.Hover(text, range);
+  }
+
+  function signature(document, position) {
+    const here = scanBefore(document, position);
+    if (here.comment || here.string) return undefined;
+    const frame = here.stack[here.stack.length - 1];
+    const entry = frame?.open === "(" ? entryOf(frame.callee, importsOf(document)) : null;
+    if (!entry || (entry.kind !== "function" && entry.kind !== "class")) return undefined;
+    const info = new vscode.SignatureInformation(entry.signature, markdown(entry.summary));
+    const names = parameters(entry);
+    info.parameters = names.map((p) => new vscode.ParameterInformation(p));
+    const keyword = /^\s*([A-Za-z_]\w*)\s*=/.exec(here.text.slice(frame.argStart));
+    const named = keyword ? names.findIndex((p) => bareName(p) === keyword[1]) : -1;
+    const help = new vscode.SignatureHelp();
+    help.signatures = [info];
+    help.activeSignature = 0;
+    help.activeParameter = Math.max(0, named >= 0 ? named : Math.min(frame.commas, names.length - 1));
+    return help;
+  }
+
+  return { complete, hover, signature };
+}
+
+// The parameters of an entry's signature, "circle(x, y, diameter)" -> ["x", "y", "diameter"], splitting only at top-level commas.
+function parameters(entry) {
+  const inner = entry.signature.slice(entry.signature.indexOf("(") + 1, entry.signature.lastIndexOf(")"));
+  const out = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < inner.length; i++) {
+    if ("([{".includes(inner[i])) depth++;
+    else if (")]}".includes(inner[i])) depth--;
+    else if (inner[i] === "," && depth === 0) { out.push(inner.slice(from, i).trim()); from = i + 1; }
+  }
+  out.push(inner.slice(from).trim());
+  return out.filter(Boolean);
+}
+
+// Read Python text from its start to the cursor. Returns the open brackets (innermost last, each with the call's dotted name,
+// how many commas it has seen, and where its current argument began), and whether the end is inside a string or a comment.
+function scan(text) {
+  const stack = [];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "#") {
+      const end = text.indexOf("\n", i);
+      if (end < 0) return { stack, text, comment: true };
+      i = end + 1;
+    } else if (c === '"' || c === "'") {
+      const quote = text.startsWith(c.repeat(3), i) ? c.repeat(3) : c;
+      let j = i + quote.length;
+      for (; j < text.length; j++) {
+        if (text[j] === "\\") j++;
+        else if (text.startsWith(quote, j) || (quote.length === 1 && text[j] === "\n")) break;
+      }
+      if (j >= text.length) return { stack, text, string: { quote, start: i } };
+      i = text[j] === "\n" ? j : j + quote.length;
+    } else {
+      if (c === "(" || c === "[" || c === "{") stack.push({ open: c, callee: c === "(" ? calleeBefore(text, i) : null, commas: 0, argStart: i + 1 });
+      else if (c === ")" || c === "]" || c === "}") stack.pop();
+      else if (c === "," && stack.length) { stack[stack.length - 1].commas++; stack[stack.length - 1].argStart = i + 1; }
+      i++;
+    }
+  }
+  return { stack, text };
+}
+
+// The dotted name just before a "(" as a list (["f", "circle"]), or null after `def` or `class`.
+function calleeBefore(text, at) {
+  const head = text.slice(Math.max(0, at - 200), at);
+  const m = /([A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*)\s*$/.exec(head);
+  if (!m || /\b(?:def|class)\s+$/.test(head.slice(0, m.index))) return null;
+  return m[1].split(".").map((part) => part.trim());
+}
+
+module.exports = { activate, deactivate, makeSuggestions };

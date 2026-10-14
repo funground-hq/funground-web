@@ -1,6 +1,9 @@
 {
   "name": "funground-extension-tests",
   "private": true,
+  "scripts": {
+    "suggestions": "node suggestions_test.mjs"
+  },
   "type": "module",
   "description": "Headless tests of the funground VS Code web extension (story S-158): VS Code for the web from @vscode/test-web, driven by Playwright in the installed Chrome.",
   "devDependencies": {

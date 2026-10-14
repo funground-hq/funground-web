@@ -35,6 +35,13 @@ To keep your sketches, make your own copy of the
 [funground sketchbook](https://github.com/funground-hq/sketchbook) on GitHub and open it with `.`.
 Saving is GitHub's own: **Source Control**, then **Commit & Push**.
 
+## Suggestions while you type
+
+Type `f.` and the editor lists funground's functions with what they take. `f.COLORS.` lists the colour names with a
+small swatch, and `f.fill("` offers the colour names inside the quotes. Hover a name to read what it does, with a link
+to the reference. Type `f.circle(` and the editor shows the parameters, and which one you are on. It works in github.dev
+and vscode.dev as well. If you do not want it, turn off the setting **funground: Suggestions**.
+
 ## Safe by design
 
 Your sketch runs in a part of the page of its own, never with the editor's rights or your GitHub
