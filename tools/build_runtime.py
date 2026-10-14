@@ -7,6 +7,9 @@ Standard library only; nothing is installed. It writes, under runner/runtime/ (g
     wheels/        the three C-extension wheels (pycairo, uharfbuzz, skia-pathops) downloaded from the
                    funground-cairo-wasm release and checked against that release's SHA256SUMS.txt,
                    and the funground wheel built from the checkout given by --funground
+    completions.json  the checkout's funground/completions.json (names, signatures, colours and option words), role
+                   "completions": the VS Code extension's suggestions (S-205) are made from it, so they always match the
+                   funground this runtime runs
     examples/      the checkout's gallery and Session 1 examples, with an index.json, for demo.html
     manifest.json  every file with its role, size and SHA-256; worker.js installs the wheels it lists
 
@@ -211,9 +214,15 @@ def main() -> None:
     c_wheels = keep_c_wheels(wheels, out / "manifest.json") if args.offline else download_c_wheels(wheels)
     fg_wheel = build_funground_wheel(root, wheels)
     count = copy_examples(root, examples)
+    completions = out / "completions.json"
+    source = root / "funground" / "completions.json"
+    if not source.is_file():
+        raise SystemExit(f"{source} is missing: the checkout is older than funground's completions.json (S-195)")
+    shutil.copyfile(source, completions)
 
     files = [{"name": f"wheels/{w.name}", "role": "c-extension", "size": w.stat().st_size, "sha256": sha256(w.read_bytes())} for w in c_wheels]
     files.append({"name": f"wheels/{fg_wheel.name}", "role": "funground", "size": fg_wheel.stat().st_size, "sha256": sha256(fg_wheel.read_bytes())})
+    files.append({"name": completions.name, "role": "completions", "size": completions.stat().st_size, "sha256": sha256(completions.read_bytes())})
     manifest = {"funground": git_state(root), "release": RELEASE, "files": files, "examples": count}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     for f in files:

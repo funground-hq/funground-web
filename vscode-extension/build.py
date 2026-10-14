@@ -4,6 +4,8 @@ r"""Assemble the funground VS Code extension (story S-158) from this repository'
 
 Needs runner/runtime/ (tools/build_runtime.py). Standard library only; nothing is installed. It writes:
 
+    media/completions.json   funground's suggestions data, from runner/runtime/ (git-ignored): the extension reads it for
+                             completion, hover and signature help (S-205)
     media/runner/            runner.js, worker.js, audio.js, microphone-worklet.js, copied from ../runner (git-ignored)
     media/runner/runtime/    with --runtime bundled (default): manifest.json and the wheels the worker installs, plus
                              svgelements and pypdf (role "dependency"), so nothing is fetched from PyPI
@@ -17,7 +19,7 @@ Needs runner/runtime/ (tools/build_runtime.py). Standard library only; nothing i
                              "funground.runtimeUrl" setting says otherwise
     --template OUT           the folder a sketchbook template carries as .vscode/extensions/funground/ (D-082), without
                              the runtime: package.json, extension.js and media/ (the runner's four scripts, preview.js,
-                             preview.css, icon.svg). OUT must not exist or be empty
+                             preview.css, icon.svg, completions.json). OUT must not exist or be empty
     --vsix                   funground-<version>.vsix beside this file (a zip in the format vsce writes)
 
 With --runtime site, media/runner/ holds only the runner's four scripts and the extension loads the rest from the site.
@@ -38,6 +40,7 @@ REPO = HERE.parent
 RUNNER_FILES = ("runner.js", "worker.js", "audio.js", "microphone-worklet.js")
 TEMPLATE_FILES = ("package.json", "extension.js")
 MEDIA_FILES = ("preview.js", "preview.css", "icon.svg")
+COMPLETIONS = "completions.json"                                             # in runner/runtime/ (role "completions") and in media/
 PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/"
 PYODIDE_CORE = ("pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json")
 PYODIDE_PACKAGES = ("micropip", "fonttools", "pygame-ce", "pillow")        # worker.js: PYODIDE_PACKAGES and ON_DEMAND
@@ -102,6 +105,18 @@ def copy_runtime(out: Path) -> None:
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 
 
+def copy_completions() -> None:
+    """media/completions.json from runner/runtime/, checked against the manifest: the suggestions match the funground the runtime runs."""
+    manifest = json.loads((REPO / "runner" / "runtime" / "manifest.json").read_text(encoding="utf-8"))
+    entry = next((f for f in manifest["files"] if f["role"] == "completions"), None)
+    if entry is None:
+        sys.exit("runner/runtime/manifest.json lists no completions.json: run tools/build_runtime.py again")
+    data = (REPO / "runner" / "runtime" / entry["name"]).read_bytes()
+    if sha256(data) != entry["sha256"]:
+        sys.exit(f"{entry['name']}: SHA-256 does not match runner/runtime/manifest.json (run tools/build_runtime.py)")
+    copy_file(REPO / "runner" / "runtime" / entry["name"], HERE / "media" / COMPLETIONS)
+
+
 def write_template(out: Path) -> None:
     """The extension without the runtime, for a template repository to carry (D-082), straight from the sources."""
     if out.exists() and any(out.iterdir()):
@@ -110,6 +125,7 @@ def write_template(out: Path) -> None:
         copy_file(HERE / name, out / name)
     for name in MEDIA_FILES:
         copy_file(HERE / "media" / name, out / "media" / name)
+    copy_file(HERE / "media" / COMPLETIONS, out / "media" / COMPLETIONS)
     for name in RUNNER_FILES:
         copy_file(REPO / "runner" / name, out / "media" / "runner" / name)
 
@@ -173,6 +189,7 @@ def main() -> None:
     if not (REPO / "runner" / "runtime" / "manifest.json").exists():
         sys.exit("runner/runtime/ is missing: run tools/build_runtime.py first")
 
+    copy_completions()
     runner = HERE / "media" / "runner"
     shutil.rmtree(runner, ignore_errors=True)
     runner.mkdir(parents=True)
