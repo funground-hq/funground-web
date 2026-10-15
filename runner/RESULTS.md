@@ -124,3 +124,95 @@ own temporary profile).
   quality. Those are the maintainer's (README, "Try the sound").
 
 How to repeat: `tools/build_runtime.py --funground <checkout> --offline`, then `tools/test_sound.py --funground <checkout>`.
+
+## 5. Fonts on demand (story S-211) and saved files (story S-212)
+
+Measured on 15 October 2026, same machine, funground at branch `sprint-27` (`C:\Projects\playground`), runtime built with
+`tools/build_runtime.py --funground C:\Projects\playground --offline`. Sizes are bytes from the manifest and the built files.
+
+### How funground finds its fonts
+
+`funground/typography.py` has `FONT_DIR`, the `fonts/` folder beside the module, and `DEFAULT_FONT` (`DejaVuSans.ttf`) in it.
+`FontResource(path)` opens a font with `TTFont(path)` and `open(path, "rb")` (the HarfBuzz face is made from all the bytes). The
+four DejaVu styles are opened by name from `FONT_DIR` (`_registry`, line 764); the three Noto fallbacks (emoji, symbols,
+Devanagari) are opened by `_bundled(name)` the first time `_itemise` needs a character the earlier fonts lack. So every bundled
+font is opened at one moment: the first time a sketch draws text that needs it. Text is drawn from many places, not only
+`f.text`: `api`, `controls`, `marks`, `formatted`, `exploring`, `sound`, and the PDF/SVG text exporters all import
+`typography`. funground does not copy the fonts anywhere; it reads `FONT_DIR`.
+
+### The options
+
+| | (a) a package group, like `ON_DEMAND` | (b) a lazy file at the path funground opens | (c) fonts as a second wheel |
+|---|---|---|---|
+| How | wheel without fonts; `worker.js` fetches them before the run when the source "uses text" | wheel without fonts; each font is an Emscripten lazy file in `FONT_DIR`: the browser fetches it, with a synchronous request in the worker, the first time Python opens it | a `funground-fonts` wheel installed when the source uses text |
+| Decides from | the source text: a name list | what funground really opens | the source text: a name list |
+| Complete? | only if the list is: any public name that reaches `typography` (dozens in `api.py`, and the ones that draw text without being asked: labels, page numbers, controls) must be on it. A missing one is a crash with `FileNotFoundError`, the `apply_filter` bug again | by construction: if Python opens it, it is fetched | as (a) |
+| Fonts fetched | all of them, or the list's choice | only the ones opened (DejaVu Sans for plain text; a Noto font only for its characters) | all of them |
+| Change to funground | none | none (the folder and file names are the ones funground reads) | none |
+| Cost | list to keep in step; `check_on_demand.py` would grow a typography walker | needs a server that answers HEAD (and ideally Range); one more request per font; no hash check at read time | as (a), plus a wheel |
+
+**Recommendation: (b).** It cannot be incomplete, because there is no list: the manifest lists the files of `funground/fonts/`
+(read from the folder at build time), and funground decides which it opens. It fetches the least: a plain-text sketch fetches
+one font (757,076 bytes), an emoji sketch adds the emoji font only when an emoji is drawn. It needs no change to funground.
+It is idiomatic Emscripten (`FS.createLazyFile`), about ten lines in `worker.js` (`addLazyFonts`).
+
+Details that matter:
+
+- The fonts are served as `fonts/<name>.ttf.bin`. A lazy file takes its length from a `HEAD` request and its content from the
+  `GET` (in ranges when the server says `Accept-Ranges: bytes`); a host that compresses `font/ttf` on the way would make the
+  two disagree. `.bin` is `application/octet-stream`, which static hosts leave alone. The price: a font travels uncompressed
+  (DejaVu Sans 757,076 bytes; 381,603 deflated). Measured with plain `zlib` level 9, all seven fonts deflate to 2,383,154 bytes.
+- Fail-safe: a lazy file trusts the host. `worker.js` probes one font with `HEAD`; if it is not ok, its `Content-Length` is not the
+  manifest size, or it has a `Content-Encoding`, all fonts are fetched at start-up instead, checked (size and SHA-256) and
+  written to the same paths (`runner.info.fonts` is `"eager"`). Cross-origin only the safelisted `Content-Length` is readable, which
+  is enough: a compressed font has another length. Tested by serving a wrong `Content-Length` for one scenario.
+- `HEAD` and `GET` are two requests per font.
+- A font is cached in memory for the life of the worker; a reused worker (`reuse`) does not fetch it again.
+- Integrity: the manifest has each font's SHA-256 (the build writes it), but a lazy file is read by Emscripten, so the runner
+  does not check it when it reads.
+
+### Numbers
+
+| | Bytes |
+|---|---|
+| funground wheel, with fonts (as before) | 2,877,437 |
+| funground wheel, without fonts | 458,698 |
+| **Saved on every first load** | **2,418,739** (the fonts, deflated, in the wheel) |
+| Plain-text sketch fetches | 757,076 (`DejaVuSans.ttf`), at the moment text is drawn |
+| Emoji and Devanagari text adds | 886,628 + 671,568 (symbols are tried too) + 243,520 |
+| Sum of all seven fonts, raw | 4,543,184 |
+
+The first load for a sketch with no text is the earlier 12,381,912 bytes (S-153; the funground wheel has grown since, so the
+comparison is on the wheel alone) minus 2.42 MB: about **10.1 MB** instead of 12.5 MB, 19 per cent less, 1.9 s of transfer at
+10 Mb/s. A sketch with text costs about 10.9 MB, still 1.6 MB under the budget measured before. Unpacking the wheel also takes
+less time, because 4.5 MB of fonts are no longer written into the file system on every start. Not measured here: seconds. The
+test machine's timings vary by 1 to 2 s (section 2), more than the saving in time.
+
+### Tests (`tools/test_runner.py`, scenario "fonts on demand")
+
+The server logs every request. Each sketch runs in a fresh worker. Checks, all in `report.json` under `checks`:
+
+1. a sketch that draws only a circle makes no request under `runtime/fonts/` (no `HEAD`, no `GET`);
+2. a sketch that draws `Hello` fetches `DejaVuSans.ttf` and no Noto font;
+3. a sketch that draws an emoji and Devanagari fetches `NotoEmoji-Regular` and `NotoSansDevanagari-Regular`;
+4. a script lists `FONT_DIR` and reads every `.ttf` in it: each of the manifest's fonts is there at its manifest size. This is
+   the completeness test: whatever `build_runtime.py` finds in `funground/fonts/` must be readable by funground.
+
+`text-01_text` and the other gallery cases still match their goldens byte for byte, so text, `text_box` and the rest draw the
+same. The SVG/PDF text exporters read the same files and are covered by funground's own tests; a browser run of them is
+not part of these cases.
+
+### Files the sketch saves (S-212)
+
+After each step, after a script's last line, and after `stop`'s `finish()`, the worker lists the run's folder (name, size,
+modified time) and sends each file that is new or changed since the last listing, except the names in `files`. No hook in
+funground is needed (a listing takes microseconds). Checks: a loop sketch that calls `f.save("out.png")` and `f.save("out.pdf")`
+gives two `onFile` calls, once each (the loop goes on for 0.7 s afterwards), with `\x89PNG\r\n\x1a\n` and `%PDF-` at the start
+and the types `image/png` and `application/pdf`; a script's `f.save("pic.svg")` and `f.save("pic.gif")` arrive as `image/svg+xml`
+(containing `<svg`) and `image/gif` (`GIF8`). A GIF needs Pillow, which was not loaded for a source that only says `.gif`:
+`worker.js` now loads it for `save_gif(` and for a `.gif` in the source (it found no other way to know the file name). An MP4
+needs ffmpeg and cannot be made in a browser: funground raises its own "cannot find ffmpeg" error.
+
+Limits: without `reuse`, `stop()` ends the worker at once, so only files seen after earlier steps arrive (a `finish()` that
+saves does not run); with `reuse`, the worker finishes the sketch and lists the folder once more. A save that changes a file
+twice between two listings is seen once.

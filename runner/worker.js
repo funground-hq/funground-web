@@ -14,7 +14,7 @@
 //                                           answers `stopped`. Used by runner.js's `reuse` option (D-083)
 //
 //   worker -> page
-//     ready    {versions, timings, resources}   everything is installed and checked
+//     ready    {versions, timings, resources, fonts}   everything is installed and checked; fonts is "lazy" or "eager" (S-211)
 //     started  {width, height, running}         the file ran; the canvas size it asked for (logical pixels)
 //     frame    {pixels, width, height}          RGBA bytes (physical pixels); the ArrayBuffer is transferred
 //     stepped  {running}                        the step is done; false when the sketch has ended
@@ -24,6 +24,10 @@
 //                                               list); `samples` is a Float32Array whose buffer is transferred, for "load" only
 //     microphone {command}                      "start", "stop" or "close": the sketch wants the microphone listened to or let go
 //     stopped  {}                               the run asked to stop has ended; the worker is ready for another `run`
+//     file     {name, bytes, type}              a file the sketch wrote in its folder (S-212): new or changed since the run began,
+//                                               not one the page passed in `files`; `bytes` is an ArrayBuffer (transferred), `type`
+//                                               its MIME type. Sent after the step (or the script, or the stop) that wrote it, and
+//                                               before that step's `stepped`
 //
 // A sketch that never returns (`while True:`) cannot answer `stop`: the page ends such a run by terminating the worker.
 // A sketch that ends by itself finishes normally and says `stepped {running: false}`.
@@ -49,14 +53,18 @@ const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide dist
 //   pictures: funground.imaging decodes and changes pictures with pygame-ce; Pillow does its filters faster.
 //   sound:    none. Under the runner funground plays through the page (see Sound above), so no sound function needs
 //             pygame-ce. `spectrogram` is a picture (it makes one with load_pixels), so it is in the first group.
+//   gifs:     funground writes a GIF with Pillow (export/motion.py), importing it when the save runs: `save_gif(...)`, or
+//             `save("x.gif")`, where the file name is the signal and not the call (`contains`). An MP4 needs ffmpeg, which a
+//             browser does not have: saving one raises funground's own "cannot find ffmpeg" error.
 const ON_DEMAND = [
   { packages: ["pygame-ce", "pillow"], calls: ["load_image", "get", "load_pixels", "update_pixels", "filter", "apply_filter", "resize", "mask", "tint", "spectrogram"] },
+  { packages: ["pillow"], calls: ["save_gif"], contains: [".gif"] },
 ];
 
 function packagesFor(source) {
   const wanted = new Set();
-  for (const { packages, calls } of ON_DEMAND) {
-    if (new RegExp(String.raw`\b(${calls.join("|")})\s*\(`).test(source)) packages.forEach((name) => wanted.add(name));
+  for (const { packages, calls, contains = [] } of ON_DEMAND) {
+    if (new RegExp(String.raw`\b(${calls.join("|")})\s*\(`).test(source) || contains.some((text) => source.includes(text))) packages.forEach((name) => wanted.add(name));
   }
   return [...wanted];
 }
@@ -64,9 +72,49 @@ function packagesFor(source) {
 let py = null;
 let session = null;
 let sketchFile = "sketch.py";
+let known = new Map();                  // file name -> "size:modified" for each file of the run's folder already seen or sent
+let passedIn = new Set();               // the names of the files the page passed in `files`: never reported
 
 const post = (message, transfer = []) => postMessage(message, transfer);
 const output = (stream) => (text) => post({ type: "output", stream, text });
+
+// Fonts (S-211). funground's bundled fonts (4.2 MB, 2.4 MB of the wheel) are not in the wheel. Each is a lazy file in
+// the fonts folder funground reads (typography.FONT_DIR): the browser fetches it, with a synchronous request (allowed in a
+// worker), the first time Python opens it, so a sketch that draws no text fetches no font and one that draws text
+// fetches only the fonts it uses (the Noto fallbacks only for emoji, symbols or Devanagari). Nothing here lists names:
+// the manifest lists every file of funground/fonts, and funground decides what it opens. Design: RESULTS.md, section 5.
+//
+// A lazy file trusts the host: its length comes from a HEAD request and must be the bytes the GET sends. A host that compresses
+// the font, or sends another length, would give Python a corrupt font. So one font is probed first: if the host answers HEAD
+// with the manifest's size and no Content-Encoding, the fonts are lazy; otherwise they are all fetched now, checked against
+// the manifest's size and SHA-256, and written to the same paths (slower, always correct). Returns "lazy" or "eager".
+async function installFonts(manifest, runtime) {
+  const folder = py.runPython("import importlib.util; importlib.util.find_spec('funground').submodule_search_locations[0] + '/fonts'");
+  const fonts = manifest.files.filter((f) => f.role === "font");
+  const urlOf = (font) => new URL(font.name, runtime).href;
+  if (fonts.length === 0) return "lazy";
+  let lazy = false;
+  try {
+    const head = await fetch(urlOf(fonts[0]), { method: "HEAD" });
+    lazy = head.ok && Number(head.headers.get("Content-Length")) === fonts[0].size && !head.headers.get("Content-Encoding");
+  } catch { /* unreachable: the eager path below reports the failure */ }
+  if (lazy) {
+    for (const font of fonts) py.FS.createLazyFile(folder, font.font, urlOf(font), true, false);
+    return "lazy";
+  }
+  await Promise.all(fonts.map(async (font) => {
+    const response = await fetch(urlOf(font));
+    if (!response.ok) throw new Error(`font ${font.font}: HTTP ${response.status}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length !== font.size) throw new Error(`font ${font.font}: ${bytes.length} bytes, the manifest says ${font.size}`);
+    if (crypto.subtle) {
+      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      if (digest !== font.sha256) throw new Error(`font ${font.font}: SHA-256 differs from the manifest`);
+    }
+    py.FS.writeFile(`${folder}/${font.font}`, bytes);
+  }));
+  return "eager";
+}
 
 // ---- setup
 
@@ -106,6 +154,8 @@ else:
     await micropip.install(["svgelements>=1.9", "pypdf>=5"])
 await micropip.install(funground_wheel, deps=False)
 `);
+  const fonts = await installFonts(manifest, runtime);
+  console.debug(`runner: fonts ${fonts}`);
   lap("wheels");
 
   py.runPython(PYTHON_GLUE);
@@ -113,7 +163,7 @@ await micropip.install(funground_wheel, deps=False)
   lap("check");
 
   const resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize, transfer: e.transferSize }));
-  post({ type: "ready", versions, timings, resources });
+  post({ type: "ready", versions, timings, resources, fonts });
 }
 
 // Python side of the worker: a few small functions, kept here so that this file is the whole worker.
@@ -142,6 +192,17 @@ def enter_run_folder():
     os.chdir(run_folder)
     sys.path.insert(0, run_folder)
 
+def run_files():
+    """The files in the run's folder as [name, size, modified] (names relative, with "/"), for the page to learn what the
+    sketch saved (S-212)."""
+    found = []
+    for folder, _, names in os.walk(run_folder):
+        for name in names:
+            path = os.path.join(folder, name)
+            info = os.stat(path)
+            found.append([os.path.relpath(path, run_folder).replace(os.sep, "/"), info.st_size, info.st_mtime_ns])
+    return found
+
 def push_microphone(session, chunk):
     """Hand a Float32Array from the page to the session as an array of floats (to_bytes copies it once)."""
     samples = array("f")
@@ -168,11 +229,14 @@ def check_real_libraries():
 
 async function run({ source, filename, width, height, scale, files, seed }) {
   py.globals.get("enter_run_folder")();                                    // a folder of its own: the file's files, saves and imports
+  known = new Map();
   for (const [name, bytes] of Object.entries(files ?? {})) {               // beside the sketch: "data/photo.jpg", "helpers.py"
     const folder = name.split("/").slice(0, -1).join("/");
     if (folder) py.FS.mkdirTree(folder);
     py.FS.writeFile(name, new Uint8Array(bytes));
   }
+  passedIn = new Set(Object.keys(files ?? {}));
+  sendNewFiles({ record: true });                                          // what is there now is not the sketch's: only its later writes are sent
   await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
@@ -181,8 +245,10 @@ async function run({ source, filename, width, height, scale, files, seed }) {
   try {
     session.start(source, filename);
   } catch (error) {
+    sendNewFiles();
     return fail(error);
   }
+  sendNewFiles();                                                          // a script saves while it runs
   const [canvasWidth, canvasHeight] = session.canvas_size.toJs();
   post({ type: "started", width: canvasWidth, height: canvasHeight, running: session.running });
 }
@@ -194,6 +260,7 @@ function step({ now }) {
   } catch (error) {
     fail(error);
   }
+  sendNewFiles();                                                          // f.save() writes at the end of a frame: seen by the step that ends it
   post({ type: "stepped", running });
 }
 
@@ -211,6 +278,25 @@ function fail(error) {
   const first = message.indexOf(`File "${sketchFile}"`);
   const trimmed = first < 0 ? message : "Traceback (most recent call last):\n  " + message.slice(first);
   post({ type: "error", message: trimmed });
+}
+
+// ---- files the sketch wrote (S-212)
+
+const MIME_TYPES = { png: "image/png", pdf: "application/pdf", svg: "image/svg+xml", gif: "image/gif", mp4: "video/mp4",
+  jpg: "image/jpeg", jpeg: "image/jpeg", txt: "text/plain", json: "application/json", csv: "text/csv" };
+
+// Compare the run folder's listing (name, size, modified time) with the last one: a file that is new or changed is sent to the
+// page. `record` only notes what is there. funground has no hook for a save, and none is needed: a listing costs
+// microseconds, and this runs after every step.
+function sendNewFiles({ record = false } = {}) {
+  for (const [name, size, modified] of py.globals.get("run_files")().toJs()) {
+    const stamp = `${size}:${modified}`;
+    if (known.get(name) === stamp) continue;
+    known.set(name, stamp);
+    if (record || passedIn.has(name)) continue;
+    const bytes = py.FS.readFile(name);                                    // a copy, so its buffer can be transferred
+    post({ type: "file", name, bytes: bytes.buffer, mime: MIME_TYPES[name.split(".").pop().toLowerCase()] ?? "application/octet-stream" }, [bytes.buffer]);
+  }
 }
 
 // ---- frames
@@ -278,6 +364,7 @@ function stop() {
   } catch (error) {
     fail(error);                                                           // an error in the sketch's finish()
   } finally {
+    if (session) sendNewFiles();                                           // what the sketch saved in finish(), before the next run deletes its folder
     session = null;
     post({ type: "stopped" });
   }

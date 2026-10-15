@@ -12,6 +12,7 @@ import { createRunner } from "/runner/runner.js";
 const canvas = document.getElementById("canvas");
 const lines = [];
 let frameCount = 0, finished = null;
+const files = [];                                 // what the runner reported through onFile (S-212)
 let snapshotAt = 0, snapshot = null;                  // the canvas as it is when frame `snapshotAt` is drawn
 const report = { cases: [], scenarios: {} };
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -38,12 +39,13 @@ const runner = await createRunner({
     if (n === snapshotAt) snapshot = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
   },
   onFinish: (reason) => { finished = reason; },
+  onFile: (file) => files.push(file),
 });
 report.first_load_ms = Math.round(performance.now() - t0);
 report.ready = runner.info;
 
 async function start(source, options) {
-  frameCount = 0; finished = null; lines.length = 0;
+  frameCount = 0; finished = null; lines.length = 0; files.length = 0;
   return runner.run(source, options);
 }
 
@@ -145,6 +147,138 @@ log('input events');
   report.scenarios.events = { canvas_css: [canvas.style.width, canvas.style.height], output: lines.map((l) => l.text) };
   runner.stop();
   log('events done');
+}
+
+
+log('fonts on demand');
+// ---- fonts on demand (S-211): a font is fetched only when funground opens it. The server notes every request; the page asks
+// for the font requests since its last mark. Each run has a fresh worker, so nothing is carried over from the one before.
+{
+  const manifest = await (await fetch("/runner/runtime/manifest.json")).json();
+  const fonts = manifest.files.filter((f) => f.role === "font");
+  const fontRequests = async () => (await (await fetch("/requests.json")).json()).filter((r) => r.includes("/runtime/fonts/"));
+  const drawn = async (source, filename) => {
+    await post("/mark", "");
+    const started = await start(source, { filename });
+    if (started.ok) await until(() => frameCount >= 3, 30000, "three frames");
+    runner.stop();
+    await sleep(300);
+    return { ok: started.ok, output: lines.map((l) => l.text), requests: await fontRequests() };
+  };
+  const shapes = String.raw`import funground as f
+def setup():
+    f.size(200, 200)
+def draw():
+    f.background('white')
+    f.circle(100, 100, 50)
+f.run()
+`;
+  const hello = String.raw`import funground as f
+def setup():
+    f.size(200, 100)
+def draw():
+    f.background('white')
+    f.text('Hello', 10, 10)
+f.run()
+`;
+  const rich = String.raw`import funground as f
+def setup():
+    f.size(200, 100)
+def draw():
+    f.background('white')
+    f.text('Hi \U0001F600 \u0928\u092e\u0938\u094d\u0924\u0947', 10, 10)
+f.run()
+`;
+  const everyFont = String.raw`import os, funground as f
+import funground.typography as t
+f.size(50, 50)
+for n in sorted(os.listdir(t.FONT_DIR)):
+    if n.endswith('.ttf'):
+        print(n, len(open(os.path.join(t.FONT_DIR, n), 'rb').read()))
+f.show()
+`;
+  const noText = await drawn(shapes, "shapes.py");
+  const plainText = await drawn(hello, "hello.py");
+  const richText = await drawn(rich, "rich.py");
+  await post("/mark", "");
+  await start(everyFont, { filename: "every_font.py" });
+  await sleep(500);
+  const sizes = Object.fromEntries(lines.map((l) => l.text.split(" ")).filter((p) => p.length === 2));
+  runner.stop();
+  // The fail-safe: the host reports a wrong Content-Length for fonts, so the runner must fetch and check them itself.
+  await post("/fontmode?bad=1", "");
+  const eager = {};
+  try {
+    let eagerFrames = 0;
+    const second = await createRunner({ canvas, baseUrl: new URL("/runner/", location.href), prewarm: false,
+      output: (text) => lines.push({ stream: "x", text }), onFrame: (n) => { eagerFrames = n; } });
+    eager.mode = second.info.fonts;
+    lines.length = 0;
+    const inkText = hello.replace("f.text(", `f.fill('black')
+    f.text(`);
+    const started = await second.run(inkText, { filename: "hello_eager.py" });
+    await until(() => eagerFrames >= 3, 30000, "three frames of the eager runner");
+    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    let inked = 0;
+    for (let i = 0; i < pixels.length; i += 4) if (pixels[i] < 128) inked++;      // dark pixels of the text on white
+    Object.assign(eager, { ok: started.ok, output: lines.map((l) => l.text), inked });
+    second.stop();
+  } catch (error) {
+    eager.error = String(error.message ?? error);
+  }
+  await post("/fontmode?bad=0", "");
+  report.scenarios.fonts = {
+    mode: runner.info.fonts, eager,
+    manifest_fonts: fonts.map((f) => f.font), no_text: noText, hello: plainText, rich: richText,
+    every_font: { sizes, expected: Object.fromEntries(fonts.map((f) => [f.font, String(f.size)])), requests: await fontRequests() },
+  };
+}
+
+log('saved files');
+// ---- files the sketch saved (S-212): onFile gets each once, with the right bytes
+{
+  const magic = (bytes, text) => text.split("").every((c, i) => bytes[i] === c.charCodeAt(0));
+  const loop = String.raw`import funground as f
+def setup():
+    f.size(200, 150)
+def draw():
+    f.background('orange')
+    f.circle(100, 75, 40)
+    if f.frame_count == 3:
+        f.save('out.png')
+        f.save('out.pdf')
+f.run()
+`;
+  const passed = { "data/note.txt": new TextEncoder().encode("passed in") };
+  await start(loop, { filename: "saver.py", files: passed });
+  await until(() => files.length >= 2, 30000, "two saved files");
+  await sleep(700);                                              // the loop goes on: a file must not be sent again
+  runner.stop();
+  const byName = Object.fromEntries(files.map((f) => [f.name, f]));
+  report.scenarios.saves = {
+    names: files.map((f) => f.name),
+    png: byName["out.png"] && { type: byName["out.png"].type, size: byName["out.png"].bytes.length, magic: magic(byName["out.png"].bytes, "\x89PNG\r\n\x1a\n") },
+    pdf: byName["out.pdf"] && { type: byName["out.pdf"].type, size: byName["out.pdf"].bytes.length, magic: magic(byName["out.pdf"].bytes, "%PDF-") },
+  };
+  // a script: saves while it runs, ends by itself; an SVG and a GIF (GIF needs Pillow, loaded because the source says ".gif")
+  const script = String.raw`import funground as f
+f.size(120, 80)
+f.background('teal')
+f.circle(60, 40, 20)
+f.save('pic.svg')
+f.frame_duration(0.1)
+f.save('pic.gif')
+f.show()
+`;
+  const started = await start(script, { filename: "script_saver.py" });
+  await until(() => finished !== null && files.length >= 2, 30000, "the script's files").catch(() => {});
+  const byName2 = Object.fromEntries(files.map((f) => [f.name, f]));
+  report.scenarios.script_saves = {
+    ok: started.ok, output: lines.map((l) => l.text), names: files.map((f) => f.name),
+    svg: byName2["pic.svg"] && { type: byName2["pic.svg"].type, has_svg: new TextDecoder().decode(byName2["pic.svg"].bytes).includes("<svg") },
+    gif: byName2["pic.gif"] && { type: byName2["pic.gif"].type, magic: magic(byName2["pic.gif"].bytes, "GIF8") },
+  };
+  runner.stop();
 }
 
 }
