@@ -29,6 +29,10 @@ const STOP_WAIT_MS = 1000;
  * @param {() => void} [options.onRestart]  with `reuse`: a run did not stop within STOP_WAIT_MS, so its worker was ended and a
  *   new one (a new Python) is loading; the next run waits for it, which takes seconds. A page can say so
  * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
+ * @param {(file: {name: string, bytes: Uint8Array, type: string}) => void} [options.onFile]  a file the sketch wrote in its folder
+ *   (f.save, save_gif, a plain open() ...): new or changed since the run began, not one passed in `files`. Called after the frame (or
+ *   script, or stop) that wrote it, and again if the sketch writes it again. `name` is relative to the sketch's folder, `bytes` is
+ *   the whole file and `type` its MIME type ("image/png", "application/pdf", "image/svg+xml", "image/gif", "video/mp4")
  * @param {string | URL} [options.pyodideUrl]  the folder Pyodide loads from (default: jsDelivr, in worker.js)
  * @param {string | URL} [options.runtimeUrl]  the folder holding manifest.json and the wheels (default: runtime/ under baseUrl)
  * @param {boolean} [options.spare]  while a sketch runs, keep the next run's worker loaded too, so that a re-run (an editor
@@ -41,7 +45,7 @@ const STOP_WAIT_MS = 1000;
  *   microphone is asked for as usual)
  * @returns {Promise<{info: object, run: Function, stop: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null }) {
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
@@ -132,6 +136,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       case "error": write(message.message, "stderr"); finish("error"); break;
       case "frame": if (run) drawFrame(message); break;           // a stopped run's last frames are not drawn
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
+      case "file": onFile?.({ name: message.name, bytes: new Uint8Array(message.bytes), type: message.mime }); break;   // even after the run ended: its last frame may have saved
       case "microphone": audio.microphoneCommand(message); break;
       case "started": started(message); break;
       case "stepped": if (run) { run.waiting = false; if (!message.running) finish("ended"); } break;
