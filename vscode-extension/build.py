@@ -90,7 +90,9 @@ def copy_runtime(out: Path) -> None:
         data = (source / entry["name"]).read_bytes()
         if sha256(data) != entry["sha256"]:
             raise SystemExit(f"{entry['name']}: SHA-256 does not match runner/runtime/manifest.json (run tools/build_runtime.py)")
-        (out / entry["name"]).write_bytes(data)
+        target = out / entry["name"]
+        target.parent.mkdir(parents=True, exist_ok=True)       # entries may sit in folders (wheels/, fonts/)
+        target.write_bytes(data)
     for name, version in DEPENDENCIES.items():
         release = json.loads(fetch(f"https://pypi.org/pypi/{name}/{version}/json"))
         wheel = next(f for f in release["urls"] if f["packagetype"] == "bdist_wheel" and f["filename"].endswith("-none-any.whl"))
