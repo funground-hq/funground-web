@@ -4,6 +4,9 @@ r"""Fill runner/runtime/ with what the browser runner loads from its own origin 
 
 Standard library only; nothing is installed. It writes, under runner/runtime/ (git-ignored):
 
+    fonts/         funground's bundled font files, one per file in funground/fonts/ (S-211), named <font>.bin. They are
+                   NOT in the funground wheel: worker.js makes each a lazy file in the wheel's fonts folder, so the
+                   browser fetches a font only when funground opens it (RESULTS.md, section 5)
     wheels/        the three C-extension wheels (pycairo, uharfbuzz, skia-pathops) downloaded from the
                    funground-cairo-wasm release and checked against that release's SHA256SUMS.txt,
                    and the funground wheel built from the checkout given by --funground
@@ -22,7 +25,8 @@ environment would install it). What goes in is read from the checkout's pyprojec
 cannot drift: the same packages, the same package-data patterns, the same metadata. One difference, on
 purpose: the gallery examples and their pictures (packages funground.examples and
 funground.gallery_images, 4 MB) are left out. A page does not need them to run a sketch, and the site
-fetches examples one at a time (see EXAMPLES below).
+fetches examples one at a time (see EXAMPLES below). The bundled fonts (funground/fonts/*.ttf, 4.2 MB, 2.4 MB in a
+wheel) are left out too, and served from runtime/fonts/ instead (S-211).
 """
 from __future__ import annotations
 
@@ -45,6 +49,8 @@ REPO = Path(__file__).resolve().parent.parent
 RELEASE = "https://github.com/funground-hq/funground-cairo-wasm/releases/download/v0.1.0-wasm/"
 C_WHEELS = ("pycairo", "uharfbuzz", "skia_pathops")            # name prefixes of the wheels in that release
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)                               # fixed, so the same source gives the same wheel
+FONT_SUFFIXES = (".ttf", ".otf", ".ttc")                       # the bundled fonts: left out of the wheel, served from fonts/
+FONT_URL_SUFFIX = ".bin"                                       # served as plain bytes: a host that compresses fonts breaks a lazy file's length
 EXAMPLE_FOLDERS = ("gallery", "session1")                      # under <funground>/examples/
 
 
@@ -99,8 +105,15 @@ def keep_c_wheels(out: Path, manifest: Path) -> list[Path]:
 
 # ---- the funground wheel
 
+def bundled_fonts(root: Path) -> list[Path]:
+    """Every font file in the checkout's funground/fonts/, in a fixed order. The list is read from the folder, so a font
+    added to funground is served without any change here (S-211: no list to keep complete)."""
+    return sorted(p for p in (root / "funground" / "fonts").iterdir() if p.suffix.lower() in FONT_SUFFIXES)
+
+
 def package_files(root: Path, project: dict) -> list[Path]:
-    """The files setuptools would put in the wheel, from the checkout's own configuration, in a fixed order."""
+    """The files setuptools would put in the wheel, from the checkout's own configuration, in a fixed order.
+    The bundled fonts are not among them (see bundled_fonts)."""
     setuptools = project["tool"]["setuptools"]
     mapped = set(setuptools.get("package-dir", {}))                    # packages built from other folders: left out
     patterns = setuptools.get("package-data", {}).get("funground", [])
@@ -112,7 +125,7 @@ def package_files(root: Path, project: dict) -> list[Path]:
         files.update(p for p in folder.glob("*.py"))
         if package == "funground":
             for pattern in patterns:
-                files.update(p for p in folder.glob(pattern) if p.is_file())
+                files.update(p for p in folder.glob(pattern) if p.is_file() and p.suffix.lower() not in FONT_SUFFIXES)
     return sorted(files)
 
 
@@ -154,6 +167,17 @@ def build_funground_wheel(root: Path, out: Path) -> Path:
             info.external_attr = 0o644 << 16
             wheel.writestr(info, data)
     return target
+
+
+def copy_fonts(root: Path, out: Path) -> list[Path]:
+    """The bundled fonts, byte for byte, as fonts/<name>.bin; old copies are removed first."""
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True)
+    copies = []
+    for font in bundled_fonts(root):
+        copies.append(out / (font.name + FONT_URL_SUFFIX))
+        shutil.copyfile(font, copies[-1])
+    return copies
 
 
 def git_state(root: Path) -> dict:
@@ -214,6 +238,7 @@ def main() -> None:
     c_wheels = keep_c_wheels(wheels, out / "manifest.json") if args.offline else download_c_wheels(wheels)
     fg_wheel = build_funground_wheel(root, wheels)
     count = copy_examples(root, examples)
+    fonts = copy_fonts(root, out / "fonts")
     completions = out / "completions.json"
     source = root / "funground" / "completions.json"
     if not source.is_file():
@@ -222,6 +247,8 @@ def main() -> None:
 
     files = [{"name": f"wheels/{w.name}", "role": "c-extension", "size": w.stat().st_size, "sha256": sha256(w.read_bytes())} for w in c_wheels]
     files.append({"name": f"wheels/{fg_wheel.name}", "role": "funground", "size": fg_wheel.stat().st_size, "sha256": sha256(fg_wheel.read_bytes())})
+    files += [{"name": f"fonts/{f.name}", "role": "font", "font": f.name[:-len(FONT_URL_SUFFIX)], "size": f.stat().st_size,
+               "sha256": sha256(f.read_bytes())} for f in fonts]
     files.append({"name": completions.name, "role": "completions", "size": completions.stat().st_size, "sha256": sha256(completions.read_bytes())})
     manifest = {"funground": git_state(root), "release": RELEASE, "files": files, "examples": count}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")

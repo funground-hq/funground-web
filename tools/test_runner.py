@@ -58,7 +58,8 @@ def build_cases(funground: Path, runtime: Path) -> list[dict]:
     return cases
 
 
-def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent: dict):
+def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent: dict, requests: list[str]):
+    """`requests` gets one entry per request, "GET /path" or "HEAD /path"; the page asks for the ones since a mark."""
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"                           # keep-alive: a closed connection can cut a large body short
 
@@ -67,18 +68,45 @@ def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent
             if path == "/cases.json":
                 self.reply(json.dumps(cases).encode(), ".json")
                 return
+            if path == "/requests.json":                         # the requests since the last "mark" entry, then a new mark
+                since = next((i for i in range(len(requests) - 1, -1, -1) if requests[i].startswith("MARK")), -1)
+                self.reply(json.dumps(requests[since + 1:]).encode(), ".json")
+                return
+            requests.append(f"GET {path}")
             target = (REPO / path.lstrip("/")).resolve()
             if REPO not in target.parents or not target.is_file():
                 self.send_error(404)
                 return
             data = target.read_bytes()
             sent[path] = sent.get(path, 0) + len(data)
-            self.reply(data, target.suffix)
+            span = re.fullmatch(r"bytes=(\d+)-(\d*)", self.headers.get("Range", ""))
+            if span:                                              # a lazy file (fonts, S-211) reads in ranges
+                first = int(span[1])
+                last = min(int(span[2] or len(data) - 1), len(data) - 1)
+                self.reply(data[first:last + 1], target.suffix, 206, {"Content-Range": f"bytes {first}-{last}/{len(data)}"})
+            else:
+                self.reply(data, target.suffix)
 
-        def reply(self, data: bytes, suffix: str):
+        def do_HEAD(self):
+            path = self.path.split("?")[0]
+            requests.append(f"HEAD {path}")
+            target = (REPO / path.lstrip("/")).resolve()
+            if REPO not in target.parents or not target.is_file():
+                self.send_error(404)
+                return
             self.send_response(200)
+            self.send_header("Content-Type", TYPES.get(target.suffix, "application/octet-stream"))
+            self.send_header("Content-Length", str(target.stat().st_size + (1 if box.get("bad_fonts") and "/runtime/fonts/" in path else 0)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+
+        def reply(self, data: bytes, suffix: str, status: int = 200, headers: dict | None = None):
+            self.send_response(status)
             self.send_header("Content-Type", TYPES.get(suffix, "application/octet-stream"))
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Accept-Ranges", "bytes")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             for i in range(0, len(data), 65536):                # the default single write stalls on large bodies here
                 self.wfile.write(data[i:i + 65536])
@@ -89,6 +117,10 @@ def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent
             if self.path.startswith("/snap"):
                 query = dict(p.split("=") for p in self.path.split("?")[1].split("&"))
                 Image.frombuffer("RGBA", (int(query["w"]), int(query["h"])), body, "raw", "RGBA", 0, 1).save(snaps / f"{query['id']}.png")
+            elif self.path.startswith("/fontmode"):                 # ?bad=1: HEAD for a font claims one byte too many
+                box["bad_fonts"] = self.path.endswith("bad=1")
+            elif self.path == "/mark":
+                requests.append("MARK")
             elif self.path == "/log":
                 print(f"page: {body.decode()}", file=sys.stderr, flush=True)
             else:
@@ -129,6 +161,39 @@ def scale_check(case: dict, snaps: Path, dpr: float) -> dict:
     return {"id": case["id"], "size": list(actual.size), "expected_size": expected, "size_ok": close, "colours": colours, "blank": colours <= 1}
 
 
+def check_scenarios(scenarios: dict) -> dict[str, bool]:
+    """Pass or fail for the scenarios with an exact answer: fonts on demand (S-211) and saved files (S-212)."""
+    checks: dict[str, bool] = {}
+    fonts = scenarios.get("fonts")
+    if fonts:
+        used = lambda run, name: any(r.endswith(f"/{name}.bin") and r.startswith("GET") for r in run["requests"])
+        # only GETs count: each worker's start-up probes one font with a HEAD (worker.js installFonts), whenever it happens to start
+        checks["fonts: a sketch with no text fetches no font file"] = fonts["no_text"]["ok"] and not any(r.startswith("GET") for r in fonts["no_text"]["requests"])
+        checks["fonts: text fetches DejaVuSans and no other font"] = (fonts["hello"]["ok"] and used(fonts["hello"], "DejaVuSans.ttf")
+            and not any("Noto" in r for r in fonts["hello"]["requests"]))
+        checks["fonts: emoji and Devanagari fetch their Noto fonts"] = (fonts["rich"]["ok"] and used(fonts["rich"], "NotoEmoji-Regular.ttf")
+            and used(fonts["rich"], "NotoSansDevanagari-Regular.ttf"))
+        every = fonts["every_font"]
+        checks["fonts: every bundled font in the manifest is readable at its size"] = (len(fonts["manifest_fonts"]) >= 7
+            and every["sizes"] == every["expected"])
+    saves = scenarios.get("saves")
+    if saves:
+        checks["files: out.png and out.pdf are each reported once, with their magic bytes"] = (
+            sorted(saves["names"]) == ["out.pdf", "out.png"] and bool(saves["png"]) and bool(saves["pdf"])
+            and saves["png"]["magic"] and saves["png"]["type"] == "image/png"
+            and saves["pdf"]["magic"] and saves["pdf"]["type"] == "application/pdf")
+    if fonts:
+        eager = fonts.get("eager", {})
+        checks["fonts: the first runner takes the lazy way"] = fonts.get("mode") == "lazy"
+        checks["fonts: a host with a wrong Content-Length gets the eager way, and text still renders"] = (
+            eager.get("mode") == "eager" and eager.get("ok") and not eager.get("output") and eager.get("inked", 0) > 50)
+    script = scenarios.get("script_saves")
+    if script:
+        checks["files: a script's SVG and GIF are reported"] = (bool(script["svg"]) and bool(script["gif"]) and script["svg"]["type"] == "image/svg+xml"
+            and script["svg"]["has_svg"] and script["gif"]["magic"] and script["gif"]["type"] == "image/gif")
+    return checks
+
+
 BATCH = 3            # cases per Chrome start: a long chain of worker boots in one page stalled on this machine (see the README)
 
 
@@ -136,7 +201,7 @@ def run_batch(cases: list[dict], scenarios: bool, args, snaps: Path, sent: dict,
     """One Chrome start: its page runs these cases (and the scenarios if asked) and posts one report; None on timeout."""
     box: dict = {}
     done = threading.Event()
-    server = serve(cases, snaps, box, done, sent)
+    server = serve(cases, snaps, box, done, sent, [])
     profile = args.profile or Path(tempfile.mkdtemp(prefix="chrome_runner_"))
     query = f"?scenarios={int(scenarios)}&prewarm={0 if args.no_prewarm else 1}"
     command = [CHROME, "--headless=new", "--enable-logging=stderr", f"--user-data-dir={profile}", *FLAGS]
@@ -199,11 +264,12 @@ def main() -> int:
         report["pixels"] = [pixel_check(c, snaps) for c in taken]
     else:
         report["scaled"] = [scale_check(c, snaps, args.dpr) for c in taken]
+    report["checks"] = check_scenarios(report["scenarios"])
     (out / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     summary = {k: v for k, v in report.items() if k not in ("server_bytes", "ready", "cases")}
     summary["cases"] = [{k: c.get(k) for k in ("id", "start_ms", "frame_ms", "error")} for c in report["cases"]]
     print(json.dumps(summary, indent=1))
-    return 1 if report["timeouts"] or any(b["fatal"] for b in report["batches"]) else 0
+    return 1 if report["timeouts"] or any(b["fatal"] for b in report["batches"]) or not all(report["checks"].values()) else 0
 
 
 if __name__ == "__main__":
