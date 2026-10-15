@@ -21,7 +21,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 </script>
 ```
 
-- `createRunner({canvas, output, baseUrl, prewarm, onFrame, onFinish, onSound, ...})` (the options after `onSound` are in the table below). `baseUrl` is the folder holding
+- `createRunner({canvas, output, baseUrl, prewarm, onFrame, onFinish, onSound, onFile, ...})` (the options after `onSound` are in the table below). `baseUrl` is the folder holding
   `worker.js` and `runtime/` (default: next to `runner.js`).
 - `run(source, {filename, files, width, height})`: `files` maps a path to bytes (`{"data/photo.jpg": Uint8Array}`),
   written beside the sketch before it starts. `width`/`height` are the canvas size `f.full_screen()` fills until
@@ -44,6 +44,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 | `reuse` (D-083) | `false` | Run the next sketch in the same worker (the same Python) when the last one has ended, or stops when asked: a re-run takes about 0.1 s instead of loading Python again. funground's `Session` starts each sketch afresh. A sketch that does not stop within a second (`while True:`, or a long `setup()`) still has its worker ended, and a new Python loads (seconds). |
 | `onRestart` | none | With `reuse`: called when that happens, so the page can say why the next run waits. |
 | `spare` | `false` | While a sketch runs, keep the next run's worker loaded too, so that a re-run starts at once. Costs a second Python's memory. Not needed with `reuse`. |
+| `onFile` (S-212) | none | Called with `{name, bytes, type}` for each file the sketch writes in its folder (see "Files the sketch saves" below). |
 | `microphoneRefusal` | none | For a host that does not allow the microphone (VS Code's panel): the line a sketch that calls `mic.start()` gets in its output instead. The browser is not asked, and the sketch hears nothing (as after a refusal). |
 | `run(source, {seed})` | none | Seed funground's random numbers for this run, so every run draws the same (tests compare frames with goldens). It is applied to the run's own sketch, after funground's `Session` is made. |
 
@@ -53,6 +54,25 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
   folder is under `python sketch.py`). `run(..., {files})` writes into it, so `files` can hold data (`data/photo.png`) and
   other `.py` files the sketch imports (`helpers.py`); modules imported that way are forgotten when the run stops, so an
   edited helper is read again.
+
+## Files the sketch saves (S-212)
+
+`f.save("poster.png")`, `f.save("poster.pdf")`, `f.save("art.svg")`, `f.save_gif(...)` and a plain `open("x.txt", "w")` write into the
+sketch's own folder (the one `files` were written to). The runner tells the page about them:
+
+```js
+const runner = await createRunner({ canvas, onFile: ({ name, bytes, type }) => offerDownload(name, new Blob([bytes], { type })) });
+```
+
+- `name` is the path in the sketch's folder (`"out.png"`, `"frames/0001.png"`), `bytes` a `Uint8Array` with the whole file, `type`
+  its MIME type (`image/png`, `application/pdf`, `image/svg+xml`, `image/gif`, `video/mp4`; other files `application/octet-stream`).
+- Which files: new or changed since the run began, except the ones the page passed in `files`. The worker lists the folder (name,
+  size, modified time) after every step, after a script's last line, and after the sketch's `finish()` when the run is stopped
+  with `reuse`. So a save in an animation arrives within the frame that made it, once; saving the same name again sends it again.
+- `onFile` can be called after `onFinish` (the last frame saved, then the run ended). Without `reuse`, `stop()` ends the worker at
+  once: files saved up to the last finished step have arrived, a `finish()` that saves has not run.
+- A GIF is made with Pillow, loaded when the source says `save_gif(` or `.gif`. An MP4 needs ffmpeg, which a browser does not have:
+  the sketch gets funground's "cannot find ffmpeg" error.
 
 ## The runtime folder
 
@@ -65,7 +85,15 @@ It downloads the three C-extension wheels from the `funground-cairo-wasm` releas
 `SHA256SUMS.txt`), builds the funground wheel from the checkout, copies the examples, and writes `manifest.json`.
 Pyodide itself comes from jsDelivr; `fonttools` from the Pyodide distribution; `svgelements` and `pypdf` from PyPI
 through micropip. `pygame-ce` and `pillow` (Pyodide distribution) are loaded only for a sketch that calls a picture
-function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps that list complete). Sound does not need them.
+function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps that list complete). Sound does not need them. Pillow alone
+is loaded for `save_gif(` or a `.gif` in the source.
+The bundled fonts (`funground/fonts/*.ttf`, 2.4 MB of the wheel) are not in the funground wheel (S-211): they are copied to
+`runtime/fonts/<name>.ttf.bin` and the manifest lists each (role `font`). `worker.js` makes each a lazy file in funground's fonts
+folder, so the browser fetches a font the first time funground opens it: a sketch with no text fetches none, plain text fetches
+`DejaVuSans.ttf` (757 KB), the Noto fallbacks come only for emoji, symbols or Devanagari. There is no list of names to keep
+complete. It fails safe: `worker.js` first asks `HEAD` for one font, and uses lazy files only if the answer is ok, has the
+manifest's `Content-Length` and no `Content-Encoding`; otherwise it fetches all the fonts at start-up, checks their size and
+SHA-256, and writes them to the same paths (slower, always correct). `runner.info.fonts` says which: `"lazy"` or `"eager"`. Design and numbers: `RESULTS.md`, section 5.
 `build_runtime.py --offline` rebuilds the funground wheel and the examples without downloading, keeping the
 C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`).
 
@@ -108,7 +136,7 @@ drawing should not touch the audio); and a microphone that comes back out of the
 
 - `runner/demo.html`: serve the repository root with the venv's `python -m http.server` and open `/runner/demo.html`.
 - `tools/test_runner.py --funground <checkout>`: headless Chrome, Session 1 and gallery examples against the goldens
-  (byte for byte at 1x), Stop, errors, events. Reports in `tests/out/` (git-ignored). `--dpr 1.25` checks a fractional
+  (byte for byte at 1x), Stop, errors, events, fonts on demand (request counts) and saved files (`onFile`). Reports in `tests/out/` (git-ignored). `--dpr 1.25` checks a fractional
   scale (size and not blank); `--limit 1 --skip-scenarios [--profile DIR]` measures first load.
 - `tools/test_sound.py --funground <checkout>`: sound and the microphone (S-137) in headless Chrome with a fake microphone:
   the examples' sound commands against CPython's, audible output at the speakers, the fake microphone's level reaching
@@ -132,7 +160,8 @@ Measured results, criteria and noise caveats: `RESULTS.md`.
   full, non-blank frame of the right size. A funground-side decision is needed (see RESULTS.md).
 - **First-load budget (S-139) not met on this estimate**: 12.4 MB for a plain sketch (about 10 to 14 s on 10 Mb/s;
   budget 10 s); a repeat visit took 3.3 to 5.5 s here (budget 3 s). Pictures add 2.56 MB (pygame-ce and Pillow) and
-  about 1.2 s cold, only for sketches that need them. The bundled fonts are 2.42 MB of the funground wheel.
+  about 1.2 s cold, only for sketches that need them. The bundled fonts were 2.42 MB of the funground wheel; since S-211 they are fetched on demand, which brings a first load of a sketch without text to
+  about 10.1 MB (RESULTS.md, section 5).
 - A function that needs pygame-ce and is missing from `ON_DEMAND` fails with "No module named 'pygame'":
   `tools/check_on_demand.py --funground <checkout>` finds such a function. `tint` is listed by hand.
 - Chrome only was tried. Headless Chrome has no real vsync, so frame rates are not measured here.
