@@ -6,7 +6,7 @@ Needs runner/runtime/ (tools/build_runtime.py). Standard library only; nothing i
 
     media/completions.json   funground's suggestions data, from runner/runtime/ (git-ignored): the extension reads it for
                              completion, hover and signature help (S-205)
-    media/runner/            runner.js, worker.js, audio.js, microphone-worklet.js, copied from ../runner (git-ignored)
+    media/runner/            runner.js, worker.js, audio.js, camera.js, microphone-worklet.js, copied from ../runner (git-ignored)
     media/runner/runtime/    with --runtime bundled (default): manifest.json and the wheels the worker installs, plus
                              svgelements and pypdf (role "dependency"), so nothing is fetched from PyPI
     media/runner/pyodide/    with --runtime bundled: the part of Pyodide the runner uses (core, standard library, and
@@ -37,7 +37,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
-RUNNER_FILES = ("runner.js", "worker.js", "audio.js", "microphone-worklet.js")
+RUNNER_FILES = ("runner.js", "worker.js", "audio.js", "camera.js", "microphone-worklet.js")
 TEMPLATE_FILES = ("package.json", "extension.js")
 MEDIA_FILES = ("preview.js", "preview.css", "icon.svg")
 COMPLETIONS = "completions.json"                                             # in runner/runtime/ (role "completions") and in media/

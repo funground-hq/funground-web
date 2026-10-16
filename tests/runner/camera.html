@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>funground runner camera tests</title>
+<body>
+<canvas id="canvas" width="640" height="400"></canvas>
+<script type="module">
+// Driven by tools/test_camera.py (story S-172). Runs each case with the runner exactly as a site would, with a runner of
+// its own (a case may set `cameraRefusal`), and posts one report: the output, the files the sketch saved, and whether
+// the camera was open while the sketch ran and after it stopped. Chrome supplies a fake camera, or refuses it.
+import { createRunner } from "/runner/runner.js";
+
+const canvas = document.getElementById("canvas");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const post = (path, body) => fetch(path, { method: "POST", body });
+const log = (text) => { console.log(text); return post("/log", text); };
+
+const report = { cases: [] };
+try {
+  for (const c of await (await fetch("/cases.json")).json()) {
+    const result = { id: c.id };
+    const lines = [], files = [];
+    let finished = null;
+    log(`case ${c.id}`);
+    try {
+      const runner = await createRunner({
+        canvas,
+        baseUrl: new URL("/runner/", location.href),
+        prewarm: false,
+        output: (text, stream) => lines.push({ stream, text }),
+        onFinish: (reason) => { finished = reason; },
+        onFile: (file) => files.push({ name: file.name, type: file.type, size: file.bytes.length,
+          head: String.fromCharCode(...file.bytes.slice(0, 6)) }),
+        cameraRefusal: c.refusal ?? null,
+      });
+      const source = await (await fetch(c.url)).text();
+      const started = await runner.run(source, { filename: c.url.split("/").pop(), width: 640, height: 400 });
+      if (!started.ok) throw new Error(lines.map((l) => l.text).join("\n"));
+      const end = performance.now() + c.wait_s * 1000;
+      const done = () => lines.some((l) => new RegExp(c.until_output).test(l.text));
+      while (!done() && finished === null && performance.now() < end) await sleep(50);
+      result.reached = done();
+      result.finished = finished;
+      result.camera_while_running = runner.cameraState();
+      await runner.stop();
+      result.camera_after_stop = runner.cameraState();
+    } catch (error) {
+      result.error = String(error.message ?? error);
+    }
+    result.output = lines.map((l) => `${l.stream}: ${l.text}`);
+    result.files = files;
+    report.cases.push(result);
+  }
+} catch (error) {
+  report.fatal = String(error.stack ?? error);
+}
+await post("/result", JSON.stringify(report));
+</script>

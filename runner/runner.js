@@ -10,6 +10,7 @@
 // finds Python ready (or nearly).
 
 import { createAudio } from "./audio.js";
+import { createCamera } from "./camera.js";
 
 const KEY_NAMES = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", Enter: "enter", Escape: "escape" };
 const MOUSE_BUTTONS = ["left", "center", "right"];                 // MouseEvent.button 0, 1, 2
@@ -43,9 +44,11 @@ const STOP_WAIT_MS = 1000;
  * @param {string} [options.microphoneRefusal]  for a host that does not allow the microphone (VS Code's panel): the line a sketch
  *   that starts it gets in its output instead; the browser is not asked and the sketch hears nothing (default: none, the
  *   microphone is asked for as usual)
+ * @param {string} [options.cameraRefusal]  for a host that does not allow the camera (VS Code's panel): why, in a few words; a
+ *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
  * @returns {Promise<{info: object, run: Function, stop: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
@@ -53,6 +56,11 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     workletUrl: new URL("microphone-worklet.js", baseUrl),
     onChunk: (samples) => { if (run) worker.worker.postMessage({ type: "microphone", samples }, [samples.buffer]); },
     microphoneRefusal,
+  });
+  const camera = createCamera({
+    onFrame: (pixels, width, height) => { if (run) worker.worker.postMessage({ type: "camera", pixels, width, height }, [pixels.buffer]); },
+    onUnavailable: (reason) => { if (run) worker.worker.postMessage({ type: "camera-unavailable", reason }); },
+    cameraRefusal,
   });
   // Browsers keep a page silent until the visitor has clicked or pressed a key on it: the first of either, and Run, unlock sound.
   for (const kind of ["pointerdown", "keydown"]) window.addEventListener(kind, audio.unlock, { capture: true, passive: true });
@@ -106,6 +114,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     cancelAnimationFrame(run.animation);
     run.resolve({ ok: false });                                    // no effect when the run had started
     audio.reset();                                                 // nothing keeps playing or listening
+    camera.reset();                                                // or looking
     run = null;
     if (!keepWorker) replaceWorker();
     onFinish?.(reason);
@@ -138,6 +147,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
       case "file": onFile?.({ name: message.name, bytes: new Uint8Array(message.bytes), type: message.mime }); break;   // even after the run ended: its last frame may have saved
       case "microphone": audio.microphoneCommand(message); break;
+      case "camera": if (run) camera.command(message); break;
       case "started": started(message); break;
       case "stepped": if (run) { run.waiting = false; if (!message.running) finish("ended"); } break;
     }
@@ -186,6 +196,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     if (!run) return;
     if (!run.waiting) {                  // one step in flight at most: a slow sketch drops display frames, never queues them
       run.waiting = true;
+      camera.sendFrame();                // before the step, so the sketch's draw() sees it
       worker.worker.postMessage({ type: "step", now: time / 1000 });
     }
     run.animation = requestAnimationFrame(tick);
@@ -223,6 +234,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     run: runSketch,
     stop: stopRun,
     audioState: () => audio.state(),     // sound unlocked? what each voice is doing? microphone open? (for tests and tools)
+    cameraState: () => camera.state(),   // the camera open, and wanted by the sketch? (for tests and tools)
     get running() { return run !== null; },
   };
 }
