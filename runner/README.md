@@ -32,7 +32,13 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 - `stop()` terminates the worker (the sketch's `finish()` does not run). A sketch that ends by itself, or an error,
   ends the run normally. Either way a fresh worker starts loading at once (`prewarm: false` waits for the next `run`).
 - Sound and the microphone work with no setup (next section). `onSound(message)` sees each sound command (for tests
-  and tools); `runner.audioState()` says whether sound is unlocked and what each voice is doing.
+  and tools); `runner.audioState()` says whether sound is unlocked and what each voice is doing, and
+  `runner.cameraState()` whether the camera is open (`null` when it is not).
+- The camera (S-172). When the sketch calls `cam.start()`, the page asks the browser for the camera and, before each frame,
+  sends the newest picture to the sketch, scaled to the size it asked for (`camera.js`). `cam.stop()`, Stop and the end of
+  a run let it go, so the camera's light goes off. A refusal gives the sketch one line, "The camera is not available:
+  ...", and no error. A page that runs sketches in an iframe must allow the camera: `<iframe allow="camera">`.
+  Tested by `tools/test_camera.py` with Chrome's fake camera.
 - `runner.info`: library versions, load times per stage and bytes fetched, as the first worker reported them.
 - Options for the VS Code panel (S-156, S-158). All are off or default by default, so `demo.html` and the website behave as
   before. They go in `createRunner({...})` unless the table says `run()`.
@@ -46,6 +52,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 | `spare` | `false` | While a sketch runs, keep the next run's worker loaded too, so that a re-run starts at once. Costs a second Python's memory. Not needed with `reuse`. |
 | `onFile` (S-212) | none | Called with `{name, bytes, type}` for each file the sketch writes in its folder (see "Files the sketch saves" below). |
 | `microphoneRefusal` | none | For a host that does not allow the microphone (VS Code's panel): the line a sketch that calls `mic.start()` gets in its output instead. The browser is not asked, and the sketch hears nothing (as after a refusal). |
+| `cameraRefusal` (S-172) | none | For a host that does not allow the camera (VS Code's panel): why, in a few words. A sketch that calls `cam.start()` gets "The camera is not available: *reason*." in its output; the browser is not asked, and the camera is never ready (as after a refusal). |
 | `run(source, {seed})` | none | Seed funground's random numbers for this run, so every run draws the same (tests compare frames with goldens). It is applied to the run's own sketch, after funground's `Session` is made. |
 
   A runner whose files are on another origin (a VS Code webview loads them from its resource origin) starts its worker from a

@@ -10,6 +10,8 @@
 //     step   {now}                          one display frame, `now` in seconds; answers `stepped`
 //     event  {kind, x, y, button, key, keyCode, delta}   one input event (funground's InputEvent vocabulary)
 //     microphone {samples}                  a Float32Array of mono samples (-1 to 1, 44 100 Hz) the microphone heard
+//     camera {pixels, width, height}        one camera frame: RGBA bytes (a Uint8ClampedArray whose buffer is transferred)
+//     camera-unavailable {reason}           the page could not open the camera; funground prints one line with the reason
 //     stop                                  end the run (the sketch's finish() runs), so the worker can run another file;
 //                                           answers `stopped`. Used by runner.js's `reuse` option (D-083)
 //
@@ -23,6 +25,8 @@
 //     sound    {command, voice, fields, samples} a sound command for Web Audio (funground/platform/browser_audio.py has the
 //                                               list); `samples` is a Float32Array whose buffer is transferred, for "load" only
 //     microphone {command}                      "start", "stop" or "close": the sketch wants the microphone listened to or let go
+//     camera   {command, fields}                "start" {width, height}, "stop" or "close": the sketch wants camera frames at that
+//                                               size, or lets the camera go (camera.js)
 //     stopped  {}                               the run asked to stop has ended; the worker is ready for another `run`
 //     file     {name, bytes, type}              a file the sketch wrote in its folder (S-212): new or changed since the run began,
 //                                               not one the page passed in `files`; `bytes` is an ArrayBuffer (transferred), `type`
@@ -41,7 +45,8 @@
 // stop and pause a buffer (platform/browser_audio.py). Each such request leaves as a `sound` message; the page plays
 // the buffers with Web Audio (audio.js). A sound's samples travel once, with its first play. pygame is not loaded.
 // The microphone is the reverse: the page's AudioWorklet posts chunks, and they go into the ring buffer that the
-// desktop's microphone code fills, so level(), pitch() and the rest are unchanged.
+// desktop's microphone code fills, so level(), pitch() and the rest are unchanged. The camera is the same way round:
+// the page sends frames, and funground keeps the latest for the sketch's next draw().
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
@@ -209,6 +214,10 @@ def push_microphone(session, chunk):
     samples.frombytes(chunk.to_bytes())
     session.push_microphone(samples)
 
+def push_camera(session, pixels, width, height):
+    """Hand a camera frame (a Uint8ClampedArray of RGBA) from the page to the session (to_bytes copies it once)."""
+    session.push_camera(pixels.to_bytes(), width, height)
+
 def check_real_libraries():
     """Nothing is stubbed: the three C libraries are compiled extension modules (.so), and funground imports them."""
     versions = {}
@@ -240,7 +249,7 @@ async function run({ source, filename, width, height, scale, files, seed }) {
   await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
-  session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest);
+  session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest, postCameraRequest);
   if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // the Session's own sketch: a repeatable run (goldens)
   try {
     session.start(source, filename);
@@ -266,6 +275,14 @@ function step({ now }) {
 
 function microphone({ samples }) {
   if (session) py.globals.get("push_microphone")(session, samples);
+}
+
+function camera({ pixels, width, height }) {
+  if (session) py.globals.get("push_camera")(session, pixels, width, height);
+}
+
+function cameraUnavailable({ reason }) {
+  session?.camera_unavailable(reason);
 }
 
 function event({ kind, x, y, button, key, keyCode, delta }) {
@@ -356,6 +373,11 @@ function postMicrophoneRequest(command) {
   post({ type: "microphone", command });
 }
 
+// on_camera(command, fields): `fields` is a Python dict that dies when the call returns, so it is copied out.
+function postCameraRequest(command, fields) {
+  post({ type: "camera", command, fields: fields.toJs({ dict_converter: Object.fromEntries }) });
+}
+
 // ---- messages
 
 function stop() {
@@ -370,7 +392,7 @@ function stop() {
   }
 }
 
-const handlers = { init, run, step, event, microphone, stop };
+const handlers = { init, run, step, event, microphone, camera, "camera-unavailable": cameraUnavailable, stop };
 
 self.onmessage = async (e) => {
   try {

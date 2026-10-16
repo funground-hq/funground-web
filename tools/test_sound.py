@@ -122,13 +122,13 @@ def serve(cases: list[dict], box: dict, done: threading.Event):
     return server
 
 
-def run_chrome(cases: list[dict], flags: list[str], timeout: int, log_path: Path) -> dict | None:
+def run_chrome(cases: list[dict], flags: list[str], timeout: int, log_path: Path, page: str = "sound.html") -> dict | None:
     box: dict = {}
     done = threading.Event()
     server = serve(cases, box, done)
     profile = Path(tempfile.mkdtemp(prefix="chrome_sound_"))
     command = [CHROME, "--headless=new", "--enable-logging=stderr", f"--user-data-dir={profile}", *FLAGS, *flags,
-               f"http://127.0.0.1:{server.server_port}/tests/runner/sound.html"]
+               f"http://127.0.0.1:{server.server_port}/tests/runner/{page}"]
     with open(log_path, "ab") as log:
         chrome = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log)
         print(f"chrome pid {chrome.pid}: {[c['id'] for c in cases]}", file=sys.stderr, flush=True)

@@ -35,6 +35,7 @@ export async function start({ runner: runnerBase, pyodide, runtime, where }) {
       reuse: true,                               // D-083: the next sketch runs in the same Python
       microphoneRefusal: "The microphone cannot be used in this panel (VS Code does not allow it). " +
         "Run sketches that listen on the funground website or on your computer.",
+      cameraRefusal: "VS Code's panel cannot use the camera. Run the sketch on the website or on your computer",
       output: (text, stream) => {
         write(text, stream);
         if (stream === "stderr" && text.includes("Traceback")) vscode.postMessage({ type: "error", text });
