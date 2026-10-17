@@ -36,10 +36,11 @@ TYPES = {".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascrip
          ".py": "text/plain", ".whl": "application/zip", ".jpg": "image/jpeg", ".svg": "image/svg+xml"}
 FRAMES = 30                                                   # the golden frame of a sketch (tests/conftest.py run_sketch)
 
-# Session 1 (all with a golden) and five gallery examples: text, paths and path operations, a script with f.show(),
-# pictures, marks and Grid.
+# Session 1 (all with a golden) and six gallery examples: text, paths and path operations, a script with f.show(),
+# pictures, marks and Grid, and a clip loaded from a GIF (S-220).
 SESSION1 = [f"{n:02d}" for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)]
-GALLERY = ["text-01_text", "paths-05_booleans", "basics-03_a_script", "images-01_load_image", "studios-03_rhythm"]
+GALLERY = ["text-01_text", "paths-05_booleans", "basics-03_a_script", "images-01_load_image", "studios-03_rhythm",
+           "images-08_play_a_take"]
 
 
 def build_cases(funground: Path, runtime: Path) -> list[dict]:
