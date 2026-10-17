@@ -62,7 +62,7 @@ const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide dist
 //             `save("x.gif")`, where the file name is the signal and not the call (`contains`). An MP4 needs ffmpeg, which a
 //             browser does not have: saving one raises funground's own "cannot find ffmpeg" error.
 const ON_DEMAND = [
-  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "get", "load_pixels", "update_pixels", "filter", "apply_filter", "resize", "mask", "tint", "spectrogram"] },
+  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "load_clip", "get", "load_pixels", "update_pixels", "filter", "apply_filter", "resize", "mask", "tint", "spectrogram"] },
   { packages: ["pillow"], calls: ["save_gif"], contains: [".gif"] },
 ];
 

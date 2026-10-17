@@ -13,7 +13,7 @@ Standard library only; nothing is installed. It writes, under runner/runtime/ (g
     completions.json  the checkout's funground/completions.json (names, signatures, colours and option words), role
                    "completions": the VS Code extension's suggestions (S-205) are made from it, so they always match the
                    funground this runtime runs
-    examples/      the checkout's gallery and Session 1 examples, with an index.json, for demo.html
+    examples/      the checkout's gallery, Session 1 and course examples, with an index.json, for demo.html and Play
     manifest.json  every file with its role, size and SHA-256; worker.js installs the wheels it lists
 
 Why the files are copied here and not fetched from GitHub by the page: a release download carries no
@@ -51,7 +51,7 @@ C_WHEELS = ("pycairo", "uharfbuzz", "skia_pathops")            # name prefixes o
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)                               # fixed, so the same source gives the same wheel
 FONT_SUFFIXES = (".ttf", ".otf", ".ttc")                       # the bundled fonts: left out of the wheel, served from fonts/
 FONT_URL_SUFFIX = ".bin"                                       # served as plain bytes: a host that compresses fonts breaks a lazy file's length
-EXAMPLE_FOLDERS = ("gallery", "session1")                      # under <funground>/examples/
+EXAMPLE_FOLDERS = ("gallery", "session1", "course")            # under <funground>/examples/ (course: S-216)
 
 
 # ---- downloads
