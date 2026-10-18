@@ -29,7 +29,7 @@
 //                                               size, or lets the camera go (camera.js)
 //     stopped  {}                               the run asked to stop has ended; the worker is ready for another `run`
 //     file     {name, bytes, type}              a file the sketch wrote in its folder (S-212): new or changed since the run began,
-//                                               not one the page passed in `files`; `bytes` is an ArrayBuffer (transferred), `type`
+//                                               or one the page passed in `files` that the sketch then rewrote (S-221); `bytes` is an ArrayBuffer (transferred), `type`
 //                                               its MIME type. Sent after the step (or the script, or the stop) that wrote it, and
 //                                               before that step's `stepped`
 //
@@ -78,7 +78,6 @@ let py = null;
 let session = null;
 let sketchFile = "sketch.py";
 let known = new Map();                  // file name -> "size:modified" for each file of the run's folder already seen or sent
-let passedIn = new Set();               // the names of the files the page passed in `files`: never reported
 
 const post = (message, transfer = []) => postMessage(message, transfer);
 const output = (stream) => (text) => post({ type: "output", stream, text });
@@ -244,8 +243,8 @@ async function run({ source, filename, width, height, scale, files, seed }) {
     if (folder) py.FS.mkdirTree(folder);
     py.FS.writeFile(name, new Uint8Array(bytes));
   }
-  passedIn = new Set(Object.keys(files ?? {}));
-  sendNewFiles({ record: true });                                          // what is there now is not the sketch's: only its later writes are sent
+  sendNewFiles({ record: true });                                          // what is there now is not the sketch's: only its later writes are sent,
+                                                                           // a passed-in file too once the sketch rewrites it (a kept take.gif, S-221)
   await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
@@ -310,7 +309,7 @@ function sendNewFiles({ record = false } = {}) {
     const stamp = `${size}:${modified}`;
     if (known.get(name) === stamp) continue;
     known.set(name, stamp);
-    if (record || passedIn.has(name)) continue;
+    if (record) continue;
     const bytes = py.FS.readFile(name);                                    // a copy, so its buffer can be transferred
     post({ type: "file", name, bytes: bytes.buffer, mime: MIME_TYPES[name.split(".").pop().toLowerCase()] ?? "application/octet-stream" }, [bytes.buffer]);
   }
