@@ -29,6 +29,11 @@ It is not fixable in the runner. Proposals for the funground session, none appli
 web golden or a tolerance for JPEG sketches; (b) decode JPEG with a decoder that is the same everywhere (a pure-Python
 or a pinned decoder; see ADR-004); (c) make the gallery's photo a PNG.
 
+**Decided (D-101 a, 18 Oct 2026):** accepted. `tools/test_runner.py` compares a sketch that names a JPEG with a
+tolerance (mean difference at most 1, 99th percentile at most 16; measured 0.57 and 9), every other sketch exactly, and a
+frame outside its tolerance now fails the run. images-08 (a 160 x 120 GIF drawn at 480 x 360) differs by 1 in two corner
+pixels, measured; it has its own tolerance of one step, cause unverified (perhaps pixman's scaling with and without SIMD).
+
 Stop, errors, a syntax error and input events also pass (`tests/out/report.json`, "scenarios").
 
 Fractional scale, `--dpr 1.25` (no golden at that scale): all 15 cases give a frame of the golden's size times 1.25
