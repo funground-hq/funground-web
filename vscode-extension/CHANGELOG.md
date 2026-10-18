@@ -10,6 +10,9 @@ link to the reference; the colours after `f.COLORS.` (with a swatch) and the wor
 (`completions.json`), which belongs to the funground the runtime runs. The new setting `funground.suggestions` turns
 them off.
 
+The camera. A sketch that uses `f.camera()` gets one line saying the panel cannot use the camera, and keeps
+running; the website's Play and your computer can.
+
 ## 0.1.0
 
 First preview. Runs a funground sketch in a panel beside the editor, in github.dev, vscode.dev and VS Code:
