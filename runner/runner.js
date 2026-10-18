@@ -31,7 +31,7 @@ const STOP_WAIT_MS = 1000;
  *   new one (a new Python) is loading; the next run waits for it, which takes seconds. A page can say so
  * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
  * @param {(file: {name: string, bytes: Uint8Array, type: string}) => void} [options.onFile]  a file the sketch wrote in its folder
- *   (f.save, save_gif, a plain open() ...): new or changed since the run began, not one passed in `files`. Called after the frame (or
+ *   (f.save, save_gif, a plain open() ...): new or changed since the run began (a file passed in `files` only when the sketch rewrites it). Called after the frame (or
  *   script, or stop) that wrote it, and again if the sketch writes it again. `name` is relative to the sketch's folder, `bytes` is
  *   the whole file and `type` its MIME type ("image/png", "application/pdf", "image/svg+xml", "image/gif", "video/mp4")
  * @param {string | URL} [options.pyodideUrl]  the folder Pyodide loads from (default: jsDelivr, in worker.js)
