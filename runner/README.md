@@ -73,7 +73,8 @@ const runner = await createRunner({ canvas, onFile: ({ name, bytes, type }) => o
 
 - `name` is the path in the sketch's folder (`"out.png"`, `"frames/0001.png"`), `bytes` a `Uint8Array` with the whole file, `type`
   its MIME type (`image/png`, `application/pdf`, `image/svg+xml`, `image/gif`, `video/mp4`; other files `application/octet-stream`).
-- Which files: new or changed since the run began, except the ones the page passed in `files`. The worker lists the folder (name,
+- Which files: new or changed since the run began. A file the page passed in `files` is sent only when the sketch
+  rewrites it (a take kept in Play's My files and recorded again, S-221). The worker lists the folder (name,
   size, modified time) after every step, after a script's last line, and after the sketch's `finish()` when the run is stopped
   with `reuse`. So a save in an animation arrives within the frame that made it, once; saving the same name again sends it again.
 - `onFile` can be called after `onFinish` (the last frame saved, then the run ended). Without `reuse`, `stop()` ends the worker at
