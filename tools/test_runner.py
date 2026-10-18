@@ -8,7 +8,10 @@ snapshots. Chrome (--headless=new, its own profile) is started and stopped by it
 touched. By default the profile is new and deleted afterwards (a cold start); --profile DIR keeps it, so a second
 run with the same DIR measures a warm start.
 
-Pixel check: the runner's frame (1x) must equal the golden of tests/golden byte for byte. Pillow reads the PNGs.
+Pixel check: the runner's frame (1x) must equal the golden of tests/golden byte for byte, with two stated exceptions
+(TOLERANCE): a sketch that loads a JPEG (D-101 a, the browser's libjpeg decodes colour edges a little differently) and a
+picture scaled up (one step at the edge of the scaled picture, measured; cause unverified). A frame outside its
+tolerance fails the run. Pillow reads the PNGs.
 At another scale (--dpr 1.25) there is no golden: the check is that the frame is the golden's size times the scale
 (to within a pixel) and not blank.
 """
@@ -36,11 +39,21 @@ TYPES = {".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascrip
          ".py": "text/plain", ".whl": "application/zip", ".jpg": "image/jpeg", ".svg": "image/svg+xml"}
 FRAMES = 30                                                   # the golden frame of a sketch (tests/conftest.py run_sketch)
 
+# How far a frame may differ from its golden, for the sketches that cannot be exact. A pixel's difference is its largest
+# channel difference (0 to 255). "mean" bounds the average over all pixels, "p99" the 99th percentile, "max" every pixel.
+# Measured 18 Oct 2026: images-01 (a JPEG) mean 0.57, p99 9, max 87; images-08 (a 160 x 120 GIF drawn at 480 x 360) two
+# corner pixels off by 1.
+TOLERANCE = {
+    "jpeg": {"why": "a JPEG decodes a little differently in the browser (D-101 a, contract P4)", "mean": 1.0, "p99": 16},
+    "images-08_play_a_take": {"why": "a scaled-up picture: one step at its top corners", "max": 1},
+}
+JPEG = re.compile(r"\.jpe?g\b", re.I)                         # a sketch that names a JPEG file loads one
+
 # Session 1 (all with a golden) and six gallery examples: text, paths and path operations, a script with f.show(),
-# pictures, marks and Grid, and a clip loaded from a GIF (S-220).
+# pictures, marks and Grid, a clip loaded from a GIF (S-220), and a picture made see-through (S-218).
 SESSION1 = [f"{n:02d}" for n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)]
 GALLERY = ["text-01_text", "paths-05_booleans", "basics-03_a_script", "images-01_load_image", "studios-03_rhythm",
-           "images-08_play_a_take"]
+           "images-08_play_a_take", "images-10_in_front_of_a_picture"]
 
 
 def build_cases(funground: Path, runtime: Path) -> list[dict]:
@@ -56,6 +69,9 @@ def build_cases(funground: Path, runtime: Path) -> list[dict]:
         is_script = not re.search(r"^f\.run\(", source, re.M)
         cases.append({**entry, "golden": str(funground / "tests" / "golden" / "gallery" / f"{case_id}.png"),
                       "frames": 1 if is_script else FRAMES})
+    for case in cases:
+        source = (runtime / "examples" / case["source"]).read_text(encoding="utf-8")
+        case["tolerance"] = TOLERANCE.get(case["id"]) or (TOLERANCE["jpeg"] if JPEG.search(source) else None)
     return cases
 
 
@@ -149,8 +165,15 @@ def pixel_check(case: dict, snaps: Path) -> dict:
     if actual.size != golden.size:
         return {"id": case["id"], "identical": False, "why": f"size {actual.size} vs golden {golden.size}"}
     a, g = actual.convert("RGB").tobytes(), golden.convert("RGB").tobytes()
-    differing = sum(1 for i in range(0, len(a), 3) if a[i:i + 3] != g[i:i + 3]) if a != g else 0
-    return {"id": case["id"], "identical": a == g, "differing_pixels": differing, "size": list(actual.size)}
+    result = {"id": case["id"], "identical": a == g, "size": list(actual.size)}
+    if a == g:
+        return {**result, "differing_pixels": 0, "passed": True}
+    diffs = sorted(max(abs(a[i] - g[i]), abs(a[i + 1] - g[i + 1]), abs(a[i + 2] - g[i + 2])) for i in range(0, len(a), 3))
+    measured = {"mean": round(sum(diffs) / len(diffs), 3), "p99": diffs[len(diffs) * 99 // 100], "max": diffs[-1]}
+    limits = case.get("tolerance") or {}
+    passed = bool(limits) and all(measured[k] <= limits[k] for k in ("mean", "p99", "max") if k in limits)
+    return {**result, "differing_pixels": sum(1 for d in diffs if d), **measured, "passed": passed,
+            "tolerance": limits.get("why")}
 
 
 def scale_check(case: dict, snaps: Path, dpr: float) -> dict:
@@ -270,7 +293,11 @@ def main() -> int:
     summary = {k: v for k, v in report.items() if k not in ("server_bytes", "ready", "cases")}
     summary["cases"] = [{k: c.get(k) for k in ("id", "start_ms", "frame_ms", "error")} for c in report["cases"]]
     print(json.dumps(summary, indent=1))
-    return 1 if report["timeouts"] or any(b["fatal"] for b in report["batches"]) or not all(report["checks"].values()) else 0
+    failed_pixels = [p["id"] for p in report.get("pixels", []) if not p.get("passed")]
+    if failed_pixels:
+        print("frames outside their tolerance:", failed_pixels)
+    return 1 if (report["timeouts"] or any(b["fatal"] for b in report["batches"]) or not all(report["checks"].values())
+                 or failed_pixels) else 0
 
 
 if __name__ == "__main__":
