@@ -173,6 +173,15 @@ Details that matter:
   is enough: a compressed font has another length. Tested by serving a wrong `Content-Length` for one scenario.
 - `HEAD` and `GET` are two requests per font.
 - A font is cached in memory for the life of the worker; a reused worker (`reuse`) does not fetch it again.
+
+**Superseded (D-114 b, decided 18 Oct 2026, built 21 Oct).** On GitHub Pages the probe always failed (Pages compresses the
+fonts), so Play fetched all seven fonts at start-up. Now there is one way on every host: funground has a private hook
+(`typography._ensure_bundled`, called where every bundled font is opened) and the Session takes `fetch_font` and the manifest's
+`fonts`. The worker passes a synchronous `XMLHttpRequest` (allowed in a worker; the browser undoes the compression); funground
+checks size and SHA-256 and writes the font to its folder, once per worker. No `HEAD`, no ranges, no lazy files, no eager
+path. `runner.info.fonts` is `"on open"`. Tested (`tools/test_runner.py`, 21 Oct): a no-text sketch fetches no font; text
+fetches DejaVu Sans only; a server that gzips the fonts, as Pages does, still fetches only what a sketch uses and the text
+renders; a font with one changed byte gives an error naming it. Start-up time on the live site: to be measured after deploy.
 - Integrity: the manifest has each font's SHA-256 (the build writes it), but a lazy file is read by Emscripten, so the runner
   does not check it when it reads.
 

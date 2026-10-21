@@ -50,7 +50,7 @@ RELEASE = "https://github.com/funground-hq/funground-cairo-wasm/releases/downloa
 C_WHEELS = ("pycairo", "uharfbuzz", "skia_pathops")            # name prefixes of the wheels in that release
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)                               # fixed, so the same source gives the same wheel
 FONT_SUFFIXES = (".ttf", ".otf", ".ttc")                       # the bundled fonts: left out of the wheel, served from fonts/
-FONT_URL_SUFFIX = ".bin"                                       # served as plain bytes: a host that compresses fonts breaks a lazy file's length
+FONT_URL_SUFFIX = ".bin"                                       # a neutral file type, not .ttf
 EXAMPLE_FOLDERS = ("gallery", "session1", "course")            # under <funground>/examples/ (course: S-216)
 
 
