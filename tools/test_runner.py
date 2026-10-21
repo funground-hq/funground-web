@@ -18,6 +18,7 @@ At another scale (--dpr 1.25) there is no golden: the check is that the frame is
 from __future__ import annotations
 
 import argparse
+import gzip
 import http.server
 import json
 import re
@@ -76,7 +77,7 @@ def build_cases(funground: Path, runtime: Path) -> list[dict]:
 
 
 def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent: dict, requests: list[str]):
-    """`requests` gets one entry per request, "GET /path" or "HEAD /path"; the page asks for the ones since a mark."""
+    """`requests` gets one entry per request, "GET /path"; the page asks for the ones since a mark."""
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"                           # keep-alive: a closed connection can cut a large body short
 
@@ -96,32 +97,17 @@ def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent
                 return
             data = target.read_bytes()
             sent[path] = sent.get(path, 0) + len(data)
-            span = re.fullmatch(r"bytes=(\d+)-(\d*)", self.headers.get("Range", ""))
-            if span:                                              # a lazy file (fonts, S-211) reads in ranges
-                first = int(span[1])
-                last = min(int(span[2] or len(data) - 1), len(data) - 1)
-                self.reply(data[first:last + 1], target.suffix, 206, {"Content-Range": f"bytes {first}-{last}/{len(data)}"})
+            if "/runtime/fonts/" in path and box.get("font_mode") == "compress":      # what GitHub Pages does to a font
+                self.reply(gzip.compress(data), target.suffix, headers={"Content-Encoding": "gzip"})
+            elif "/runtime/fonts/" in path and box.get("font_mode") == "corrupt":     # same length, last byte changed
+                self.reply(data[:-1] + bytes([data[-1] ^ 0xFF]), target.suffix)
             else:
                 self.reply(data, target.suffix)
-
-        def do_HEAD(self):
-            path = self.path.split("?")[0]
-            requests.append(f"HEAD {path}")
-            target = (REPO / path.lstrip("/")).resolve()
-            if REPO not in target.parents or not target.is_file():
-                self.send_error(404)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", TYPES.get(target.suffix, "application/octet-stream"))
-            self.send_header("Content-Length", str(target.stat().st_size + (1 if box.get("bad_fonts") and "/runtime/fonts/" in path else 0)))
-            self.send_header("Accept-Ranges", "bytes")
-            self.end_headers()
 
         def reply(self, data: bytes, suffix: str, status: int = 200, headers: dict | None = None):
             self.send_response(status)
             self.send_header("Content-Type", TYPES.get(suffix, "application/octet-stream"))
             self.send_header("Content-Length", str(len(data)))
-            self.send_header("Accept-Ranges", "bytes")
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
             self.end_headers()
@@ -134,8 +120,8 @@ def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent
             if self.path.startswith("/snap"):
                 query = dict(p.split("=") for p in self.path.split("?")[1].split("&"))
                 Image.frombuffer("RGBA", (int(query["w"]), int(query["h"])), body, "raw", "RGBA", 0, 1).save(snaps / f"{query['id']}.png")
-            elif self.path.startswith("/fontmode"):                 # ?bad=1: HEAD for a font claims one byte too many
-                box["bad_fonts"] = self.path.endswith("bad=1")
+            elif self.path.startswith("/fontmode"):                 # ?mode=compress, corrupt or off: how the fonts are served
+                box["font_mode"] = self.path.split("mode=")[1]
             elif self.path == "/mark":
                 requests.append("MARK")
             elif self.path == "/log":
@@ -191,7 +177,6 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
     fonts = scenarios.get("fonts")
     if fonts:
         used = lambda run, name: any(r.endswith(f"/{name}.bin") and r.startswith("GET") for r in run["requests"])
-        # only GETs count: each worker's start-up probes one font with a HEAD (worker.js installFonts), whenever it happens to start
         checks["fonts: a sketch with no text fetches no font file"] = fonts["no_text"]["ok"] and not any(r.startswith("GET") for r in fonts["no_text"]["requests"])
         checks["fonts: text fetches DejaVuSans and no other font"] = (fonts["hello"]["ok"] and used(fonts["hello"], "DejaVuSans.ttf")
             and not any("Noto" in r for r in fonts["hello"]["requests"]))
@@ -207,10 +192,12 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             and saves["png"]["magic"] and saves["png"]["type"] == "image/png"
             and saves["pdf"]["magic"] and saves["pdf"]["type"] == "application/pdf")
     if fonts:
-        eager = fonts.get("eager", {})
-        checks["fonts: the first runner takes the lazy way"] = fonts.get("mode") == "lazy"
-        checks["fonts: a host with a wrong Content-Length gets the eager way, and text still renders"] = (
-            eager.get("mode") == "eager" and eager.get("ok") and not eager.get("output") and eager.get("inked", 0) > 50)
+        compressed, corrupt = fonts.get("compressed", {}), fonts.get("corrupt", {})
+        checks["fonts: a host that compresses fonts still fetches only the fonts a sketch uses, and text renders"] = (
+            compressed.get("ok") and not compressed.get("output") and compressed.get("inked", 0) > 50
+            and used(compressed, "DejaVuSans.ttf") and not any("Noto" in r for r in compressed["requests"]))
+        checks["fonts: a font whose bytes differ from the manifest gives an error naming it"] = (
+            "DejaVuSans.ttf" in "".join(corrupt.get("output", [])) and "manifest" in "".join(corrupt.get("output", [])))
     script = scenarios.get("script_saves")
     if script:
         checks["files: a script's SVG and GIF are reported"] = (bool(script["svg"]) and bool(script["gif"]) and script["svg"]["type"] == "image/svg+xml"
