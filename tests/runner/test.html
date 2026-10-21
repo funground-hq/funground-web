@@ -189,12 +189,13 @@ def draw():
     f.text('Hi \U0001F600 \u0928\u092e\u0938\u094d\u0924\u0947', 10, 10)
 f.run()
 `;
-  const everyFont = String.raw`import os, funground as f
+  const everyFont = `import os, funground as f
 import funground.typography as t
 f.size(50, 50)
-for n in sorted(os.listdir(t.FONT_DIR)):
-    if n.endswith('.ttf'):
-        print(n, len(open(os.path.join(t.FONT_DIR, n), 'rb').read()))
+for n in ${JSON.stringify(fonts.map((f) => f.font))}:
+    path = os.path.join(t.FONT_DIR, n)
+    t.FontResource(path)                    # opening a bundled font fetches it
+    print(n, os.path.getsize(path))
 f.show()
 `;
   const noText = await drawn(shapes, "shapes.py");
@@ -205,30 +206,41 @@ f.show()
   await sleep(500);
   const sizes = Object.fromEntries(lines.map((l) => l.text.split(" ")).filter((p) => p.length === 2));
   runner.stop();
-  // The fail-safe: the host reports a wrong Content-Length for fonts, so the runner must fetch and check them itself.
-  await post("/fontmode?bad=1", "");
-  const eager = {};
-  try {
-    let eagerFrames = 0;
-    const second = await createRunner({ canvas, baseUrl: new URL("/runner/", location.href), prewarm: false,
-      output: (text) => lines.push({ stream: "x", text }), onFrame: (n) => { eagerFrames = n; } });
-    eager.mode = second.info.fonts;
-    lines.length = 0;
-    const inkText = hello.replace("f.text(", `f.fill('black')
+  // A host that changes what it sends. "compress": every font is gzip-encoded with Content-Encoding, as GitHub Pages does,
+  // so the Content-Length is not the font's size. "corrupt": the bytes differ from the manifest's (same length, last byte changed).
+  const hostile = async (mode) => {
+    await post(`/fontmode?mode=${mode}`, "");
+    await post("/mark", "");
+    const result = {};
+    try {
+      let frames = 0;
+      lines.length = 0;
+      const second = await createRunner({ canvas, baseUrl: new URL("/runner/", location.href), prewarm: false,
+        output: (text) => lines.push({ stream: "x", text }), onFrame: (n) => { frames = n; } });
+      const inkText = hello.replace("f.text(", `f.fill('black')
     f.text(`);
-    const started = await second.run(inkText, { filename: "hello_eager.py" });
-    await until(() => eagerFrames >= 3, 30000, "three frames of the eager runner");
-    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
-    let inked = 0;
-    for (let i = 0; i < pixels.length; i += 4) if (pixels[i] < 128) inked++;      // dark pixels of the text on white
-    Object.assign(eager, { ok: started.ok, output: lines.map((l) => l.text), inked });
-    second.stop();
-  } catch (error) {
-    eager.error = String(error.message ?? error);
-  }
-  await post("/fontmode?bad=0", "");
+      const started = await second.run(inkText, { filename: `hello_${mode}.py` });
+      if (mode === "corrupt") {
+        await until(() => lines.length > 0, 30000, "the error about the corrupt font");      // the first frame fails
+      } else if (started.ok) {
+        await until(() => frames >= 3, 30000, `three frames with ${mode} fonts`);
+        const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+        let inked = 0;
+        for (let i = 0; i < pixels.length; i += 4) if (pixels[i] < 128) inked++;      // dark pixels of the text on white
+        result.inked = inked;
+      }
+      Object.assign(result, { ok: started.ok, output: lines.map((l) => l.text), requests: await fontRequests() });
+      second.stop();
+    } catch (error) {
+      result.error = String(error.message ?? error);
+    }
+    await post("/fontmode?mode=off", "");
+    return result;
+  };
+  const compressed = await hostile("compress");
+  const corrupt = await hostile("corrupt");
   report.scenarios.fonts = {
-    mode: runner.info.fonts, eager,
+    mode: runner.info.fonts, compressed, corrupt,
     manifest_fonts: fonts.map((f) => f.font), no_text: noText, hello: plainText, rich: richText,
     every_font: { sizes, expected: Object.fromEntries(fonts.map((f) => [f.font, String(f.size)])), requests: await fontRequests() },
   };

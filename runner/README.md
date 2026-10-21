@@ -96,12 +96,12 @@ through micropip. `pygame-ce` and `pillow` (Pyodide distribution) are loaded onl
 function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps that list complete). Sound does not need them. Pillow alone
 is loaded for `save_gif(` or a `.gif` in the source.
 The bundled fonts (`funground/fonts/*.ttf`, 2.4 MB of the wheel) are not in the funground wheel (S-211): they are copied to
-`runtime/fonts/<name>.ttf.bin` and the manifest lists each (role `font`). `worker.js` makes each a lazy file in funground's fonts
-folder, so the browser fetches a font the first time funground opens it: a sketch with no text fetches none, plain text fetches
-`DejaVuSans.ttf` (757 KB), the Noto fallbacks come only for emoji, symbols or Devanagari. There is no list of names to keep
-complete. It fails safe: `worker.js` first asks `HEAD` for one font, and uses lazy files only if the answer is ok, has the
-manifest's `Content-Length` and no `Content-Encoding`; otherwise it fetches all the fonts at start-up, checks their size and
-SHA-256, and writes them to the same paths (slower, always correct). `runner.info.fonts` says which: `"lazy"` or `"eager"`. Design and numbers: `RESULTS.md`, section 5.
+`runtime/fonts/<name>.ttf.bin` and the manifest lists each (role `font`). Nothing is fetched at start-up. `worker.js` gives the
+funground `Session` a `fetch_font` function (a synchronous request) and the manifest's sizes and SHA-256, and funground calls it the
+first time it opens a bundled font: a sketch with no text fetches none, plain text fetches `DejaVuSans.ttf` (757 KB), the Noto
+fallbacks come only for emoji, symbols or Devanagari. There is no list of names to keep complete. It works on every host,
+including one that compresses fonts (GitHub Pages does). A font whose bytes differ from the manifest gives one clear error naming it.
+`runner.info.fonts` is `"on open"`. Design and numbers: `RESULTS.md`, section 5.
 `build_runtime.py --offline` rebuilds the funground wheel and the examples without downloading, keeping the
 C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`).
 

@@ -16,7 +16,7 @@
 //                                           answers `stopped`. Used by runner.js's `reuse` option (D-083)
 //
 //   worker -> page
-//     ready    {versions, timings, resources, fonts}   everything is installed and checked; fonts is "lazy" or "eager" (S-211)
+//     ready    {versions, timings, resources, fonts}   everything is installed and checked; fonts is "on open" (S-211: each font is fetched when funground first opens it)
 //     started  {width, height, running}         the file ran; the canvas size it asked for (logical pixels)
 //     frame    {pixels, width, height}          RGBA bytes (physical pixels); the ArrayBuffer is transferred
 //     stepped  {running}                        the step is done; false when the sketch has ended
@@ -75,6 +75,7 @@ function packagesFor(source) {
 }
 
 let py = null;
+let fonts = null;                       // {fetchFont, checks} for every Session (fontSupport)
 let session = null;
 let sketchFile = "sketch.py";
 let known = new Map();                  // file name -> "size:modified" for each file of the run's folder already seen or sent
@@ -82,42 +83,28 @@ let known = new Map();                  // file name -> "size:modified" for each
 const post = (message, transfer = []) => postMessage(message, transfer);
 const output = (stream) => (text) => post({ type: "output", stream, text });
 
-// Fonts (S-211). funground's bundled fonts (4.2 MB, 2.4 MB of the wheel) are not in the wheel. Each is a lazy file in
-// the fonts folder funground reads (typography.FONT_DIR): the browser fetches it, with a synchronous request (allowed in a
-// worker), the first time Python opens it, so a sketch that draws no text fetches no font and one that draws text
-// fetches only the fonts it uses (the Noto fallbacks only for emoji, symbols or Devanagari). Nothing here lists names:
-// the manifest lists every file of funground/fonts, and funground decides what it opens. Design: RESULTS.md, section 5.
+// Fonts (S-211, D-114 b). funground's bundled fonts (4.2 MB, 2.4 MB of the wheel) are not in the wheel. Nothing is fetched at
+// start-up: the Session is given `fetch_font`, and funground calls it the first time it opens a bundled font (typography.py,
+// `_ensure_bundled`) and writes the bytes to its fonts folder. So a sketch that draws no text fetches no font, and one that
+// draws text fetches only the fonts it uses (the Noto fallbacks only for emoji, symbols or Devanagari). Nothing here lists
+// names: the manifest lists every file of funground/fonts, and funground decides what it opens. Design: RESULTS.md, section 5.
 //
-// A lazy file trusts the host: its length comes from a HEAD request and must be the bytes the GET sends. A host that compresses
-// the font, or sends another length, would give Python a corrupt font. So one font is probed first: if the host answers HEAD
-// with the manifest's size and no Content-Encoding, the fonts are lazy; otherwise they are all fetched now, checked against
-// the manifest's size and SHA-256, and written to the same paths (slower, always correct). Returns "lazy" or "eager".
-async function installFonts(manifest, runtime) {
-  const folder = py.runPython("import importlib.util; importlib.util.find_spec('funground').submodule_search_locations[0] + '/fonts'");
+// The request is a synchronous XMLHttpRequest (allowed in a worker, and Python waits for the answer). The browser decodes a
+// compressed answer (GitHub Pages compresses fonts), so this works on every host. funground checks the bytes against the
+// manifest's size and SHA-256 (`fonts`) and raises one clear error if they differ.
+function fontSupport(manifest, runtime) {
   const fonts = manifest.files.filter((f) => f.role === "font");
-  const urlOf = (font) => new URL(font.name, runtime).href;
-  if (fonts.length === 0) return "lazy";
-  let lazy = false;
-  try {
-    const head = await fetch(urlOf(fonts[0]), { method: "HEAD" });
-    lazy = head.ok && Number(head.headers.get("Content-Length")) === fonts[0].size && !head.headers.get("Content-Encoding");
-  } catch { /* unreachable: the eager path below reports the failure */ }
-  if (lazy) {
-    for (const font of fonts) py.FS.createLazyFile(folder, font.font, urlOf(font), true, false);
-    return "lazy";
-  }
-  await Promise.all(fonts.map(async (font) => {
-    const response = await fetch(urlOf(font));
-    if (!response.ok) throw new Error(`font ${font.font}: HTTP ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length !== font.size) throw new Error(`font ${font.font}: ${bytes.length} bytes, the manifest says ${font.size}`);
-    if (crypto.subtle) {
-      const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-      if (digest !== font.sha256) throw new Error(`font ${font.font}: SHA-256 differs from the manifest`);
-    }
-    py.FS.writeFile(`${folder}/${font.font}`, bytes);
-  }));
-  return "eager";
+  const urls = new Map(fonts.map((f) => [f.font, new URL(f.name, runtime).href]));
+  const checks = Object.fromEntries(fonts.map((f) => [f.font, { size: f.size, sha256: f.sha256 }]));
+  const fetchFont = (name) => {
+    const request = new XMLHttpRequest();
+    request.open("GET", urls.get(name), false);
+    request.responseType = "arraybuffer";
+    request.send();
+    if (request.status !== 200) throw new Error(`font ${name}: HTTP ${request.status}`);
+    return new Uint8Array(request.response);
+  };
+  return { fetchFont, checks };
 }
 
 // ---- setup
@@ -158,8 +145,7 @@ else:
     await micropip.install(["svgelements>=1.9", "pypdf>=5"])
 await micropip.install(funground_wheel, deps=False)
 `);
-  const fonts = await installFonts(manifest, runtime);
-  console.debug(`runner: fonts ${fonts}`);
+  fonts = fontSupport(manifest, runtime);
   lap("wheels");
 
   py.runPython(PYTHON_GLUE);
@@ -167,7 +153,7 @@ await micropip.install(funground_wheel, deps=False)
   lap("check");
 
   const resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize, transfer: e.transferSize }));
-  post({ type: "ready", versions, timings, resources, fonts });
+  post({ type: "ready", versions, timings, resources, fonts: "on open" });
 }
 
 // Python side of the worker: a few small functions, kept here so that this file is the whole worker.
@@ -248,7 +234,8 @@ async function run({ source, filename, width, height, scale, files, seed }) {
   await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
-  session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest, postCameraRequest);
+  session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest, postCameraRequest,
+                    fonts.fetchFont, py.toPy(fonts.checks));
   if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // the Session's own sketch: a repeatable run (goldens)
   try {
     session.start(source, filename);
