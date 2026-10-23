@@ -12,6 +12,8 @@
 //     microphone {samples}                  a Float32Array of mono samples (-1 to 1, 44 100 Hz) the microphone heard
 //     camera {pixels, width, height}        one camera frame: RGBA bytes (a Uint8ClampedArray whose buffer is transferred)
 //     camera-unavailable {reason}           the page could not open the camera; funground prints one line with the reason
+//     keep   {id, note}                     run funground's f.keep(note) for the run (S-226): studio/NNN.png, .py and .json in the
+//                                           run's folder, written before the answer; answers `kept`
 //     stop                                  end the run (the sketch's finish() runs), so the worker can run another file;
 //                                           answers `stopped`. Used by runner.js's `reuse` option (D-083)
 //
@@ -28,6 +30,9 @@
 //     camera   {command, fields}                "start" {width, height}, "stop" or "close": the sketch wants camera frames at that
 //                                               size, or lets the camera go (camera.js)
 //     stopped  {}                               the run asked to stop has ended; the worker is ready for another `run`
+//     kept     {id, ok, base?, files?, reason?}  the answer to `keep`: `files` names the files it wrote (each also sent as a
+//                                               `file` message just before this one); `ok: false` with a plain `reason` when
+//                                               there is no run to keep (it was stopped, or has ended)
 //     file     {name, bytes, type}              a file the sketch wrote in its folder (S-212): new or changed since the run began,
 //                                               or one the page passed in `files` that the sketch then rewrote (S-221); `bytes` is an ArrayBuffer (transferred), `type`
 //                                               its MIME type. Sent after the step (or the script, or the stop) that wrote it, and
@@ -286,12 +291,13 @@ function fail(error) {
 // ---- files the sketch wrote (S-212)
 
 const MIME_TYPES = { png: "image/png", pdf: "application/pdf", svg: "image/svg+xml", gif: "image/gif", mp4: "video/mp4",
-  jpg: "image/jpeg", jpeg: "image/jpeg", txt: "text/plain", json: "application/json", csv: "text/csv" };
+  jpg: "image/jpeg", jpeg: "image/jpeg", txt: "text/plain", json: "application/json", csv: "text/csv", py: "text/x-python" };
 
 // Compare the run folder's listing (name, size, modified time) with the last one: a file that is new or changed is sent to the
 // page. `record` only notes what is there. funground has no hook for a save, and none is needed: a listing costs
 // microseconds, and this runs after every step.
 function sendNewFiles({ record = false } = {}) {
+  const sent = [];
   for (const [name, size, modified] of py.globals.get("run_files")().toJs()) {
     const stamp = `${size}:${modified}`;
     if (known.get(name) === stamp) continue;
@@ -299,7 +305,26 @@ function sendNewFiles({ record = false } = {}) {
     if (record) continue;
     const bytes = py.FS.readFile(name);                                    // a copy, so its buffer can be transferred
     post({ type: "file", name, bytes: bytes.buffer, mime: MIME_TYPES[name.split(".").pop().toLowerCase()] ?? "application/octet-stream" }, [bytes.buffer]);
+    sent.push(name);
   }
+  return sent;
+}
+
+// Keep (S-226, D-113 b): the page's "Keep this" asks the running sketch to run f.keep(note). The Session writes the files at
+// once (funground/web.py), so the same listing that finds a saved file finds them, and they are sent before the answer.
+function keep({ id, note }) {
+  if (!session) return post({ type: "kept", id, ok: false, reason: "The sketch is not running." });
+  let base;
+  try {
+    base = session.keep(note ?? "");
+  } catch (error) {
+    const last = String(error.message ?? error).split("\n").filter((line) => line.trim()).pop() ?? "";
+    const reason = last.replace(/^\w*Error: /, "");              // funground's own plain sentence, without the class name
+    return post({ type: "kept", id, ok: false, reason });
+  }
+  const number = String(base).split("/").pop();                            // base is the run folder's path, ending studio/001
+  const files = sendNewFiles().filter((name) => name.startsWith(`studio/${number}.`));
+  post({ type: "kept", id, ok: true, base, files });
 }
 
 // ---- frames
@@ -378,7 +403,7 @@ function stop() {
   }
 }
 
-const handlers = { init, run, step, event, microphone, camera, "camera-unavailable": cameraUnavailable, stop };
+const handlers = { init, run, step, event, microphone, camera, "camera-unavailable": cameraUnavailable, keep, stop };
 
 self.onmessage = async (e) => {
   try {
