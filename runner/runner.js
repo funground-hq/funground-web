@@ -18,6 +18,7 @@ const WHEEL_NOTCH = 100;                                          // deltaY pixe
 // With `reuse`: how long a run may take to stop before its worker is ended and a new Python started. A sketch answers
 // between two frames, so a busy frame or a slow setup() needs more than a moment; a new Python costs seconds.
 const STOP_WAIT_MS = 1000;
+const KEEP_WAIT_MS = 10000;                                       // how long keep() waits for the sketch's answer (S-226)
 
 /**
  * @param {object} options
@@ -46,7 +47,7 @@ const STOP_WAIT_MS = 1000;
  *   microphone is asked for as usual)
  * @param {string} [options.cameraRefusal]  for a host that does not allow the camera (VS Code's panel): why, in a few words; a
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
- * @returns {Promise<{info: object, run: Function, stop: Function, running: boolean}>}
+ * @returns {Promise<{info: object, run: Function, stop: Function, keep: Function, running: boolean}>}
  */
 export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
   const write = outputWriter(output);
@@ -74,6 +75,8 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   let logical = { width: 0, height: 0 }; // the sketch's canvas in logical pixels
   let scale = 1;                         // backing pixels per logical pixel (devicePixelRatio when the run began)
   let frames = 0;
+  let keeps = 0;                         // numbers the keep requests (S-226)
+  const keeping = new Map();             // request number -> what to do with the worker's answer
   if (canvas.tabIndex < 0) canvas.tabIndex = 0;                    // a canvas takes the keyboard only if it can be focused
 
   const info = await worker.ready;       // a failure to load is thrown to the caller
@@ -145,6 +148,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       case "error": write(message.message, "stderr"); finish("error"); break;
       case "frame": if (run) drawFrame(message); break;           // a stopped run's last frames are not drawn
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
+      case "kept": keeping.get(message.id)?.(message); break;
       case "file": onFile?.({ name: message.name, bytes: new Uint8Array(message.bytes), type: message.mime }); break;   // even after the run ended: its last frame may have saved
       case "microphone": audio.microphoneCommand(message); break;
       case "camera": if (run) camera.command(message); break;
@@ -192,6 +196,22 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     });
   }
 
+  // Keep this run's picture (S-226): the sketch runs f.keep(note), which writes studio/NNN.png, .py and .json, and each of
+  // them reaches `onFile` as any saved file does, before the answer. Resolves { ok: true, base, files: ["studio/001.png", ...] },
+  // or { ok: false, reason } when there is no run to keep (not started, stopped, ended with an error or by f.stop()) or the
+  // worker does not answer. A script that has finished drawing can still be kept, and so can a sketch that called no_loop().
+  function keepRun(note = "") {
+    const slot = worker;
+    if (!slot?.loaded) return Promise.resolve({ ok: false, reason: "The sketch is not running." });
+    const id = ++keeps;
+    return new Promise((resolve) => {
+      const done = (answer) => { clearTimeout(timer); keeping.delete(id); resolve(answer); };
+      const timer = setTimeout(() => done({ ok: false, reason: "The sketch did not answer in time." }), KEEP_WAIT_MS);
+      keeping.set(id, ({ ok, base, files, reason }) => done(ok ? { ok, base, files } : { ok, reason }));
+      slot.worker.postMessage({ type: "keep", id, note: String(note) });
+    });
+  }
+
   function tick(time) {
     if (!run) return;
     if (!run.waiting) {                  // one step in flight at most: a slow sketch drops display frames, never queues them
@@ -233,6 +253,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     info,                                // what the first worker reported: library versions, load times, bytes fetched
     run: runSketch,
     stop: stopRun,
+    keep: keepRun,                       // keep(note): the picture, a copy of the code and a record, as files (see keepRun)
     audioState: () => audio.state(),     // sound unlocked? what each voice is doing? microphone open? (for tests and tools)
     cameraState: () => camera.state(),   // the camera open, and wanted by the sketch? (for tests and tools)
     get running() { return run !== null; },

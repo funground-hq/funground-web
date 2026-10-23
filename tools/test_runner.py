@@ -202,6 +202,20 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
     if script:
         checks["files: a script's SVG and GIF are reported"] = (bool(script["svg"]) and bool(script["gif"]) and script["svg"]["type"] == "image/svg+xml"
             and script["svg"]["has_svg"] and script["gif"]["magic"] and script["gif"]["type"] == "image/gif")
+    keeps = scenarios.get("keeps")
+    if keeps:
+        first, second, ended, stopped = keeps["first"], keeps["second"], keeps["ended"], keeps["stopped"]
+        checks["keep: a running sketch's keep reports studio/001.png, .py and .json, each once, with the right bytes"] = (
+            first.get("ok") is True and sorted(first["files"]) == ["studio/001.json", "studio/001.png", "studio/001.py"]
+            and sorted(keeps["names"]) == sorted(first["files"])
+            and keeps["png"]["magic"] and keeps["png"]["type"] == "image/png" and keeps["py"]["same"]
+            and keeps["json"]["note"] == "I kept the gold one" and keeps["json"]["sketch"] == "keeper.py" and keeps["json"]["size"] == [120, 80])
+        checks["keep: a second keep is studio/002"] = second.get("ok") is True and sorted(second["files"]) == [
+            "studio/002.json", "studio/002.png", "studio/002.py"]
+        checks["keep: a script that has finished drawing can still be kept"] = (
+            keeps["scriptOk"] and ended.get("ok") is True and "studio/001.png" in ended["files"] and "studio/001.png" in keeps["endedNames"])
+        checks["keep: a stopped sketch answers 'not running' and writes nothing"] = (
+            stopped.get("ok") is False and "not running" in stopped["reason"] and not keeps["stoppedFiles"])
     return checks
 
 

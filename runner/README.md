@@ -82,6 +82,24 @@ const runner = await createRunner({ canvas, onFile: ({ name, bytes, type }) => o
 - A GIF is made with Pillow, loaded when the source says `save_gif(` or `.gif`. An MP4 needs ffmpeg, which a browser does not have:
   the sketch gets funground's "cannot find ffmpeg" error.
 
+## Keeping the picture (S-226)
+
+`runner.keep(note)` asks the run in progress to do what `f.keep(note)` does in a sketch: it saves the picture, a copy of the code and a record as
+`studio/001.png`, `studio/001.py` and `studio/001.json` (the next free number) in the sketch's folder. Each file reaches `onFile` as any saved file does,
+once, before the promise resolves.
+
+```js
+const result = await runner.keep("I kept the low circle because it looks deliberate");
+// { ok: true, base: "/tmp/tmpab12/studio/001", files: ["studio/001.json", "studio/001.png", "studio/001.py"] }
+// { ok: false, reason: "The sketch is not running, so there is no picture to keep. Run it, then keep." }
+```
+
+- It keeps the frame on the screen, now: the files are written before the answer, however the sketch draws. A sketch that called `f.no_loop()` can be kept,
+  and so can a script that has finished drawing, with `reuse` (Play's preview uses it): without it the worker is ended with the run. The code in `studio/001.py` is the code that was run.
+- Before the first frame there is nothing to keep yet: the files arrive with the first frame, so `files` can be empty. After Stop, after an error or
+  after `f.stop()` the picture is gone: the answer is `{ ok: false, reason }`.
+- It also resolves `{ ok: false }` if the worker does not answer within ten seconds.
+
 ## The runtime folder
 
 `runtime/` (git-ignored) holds what the page loads from its own origin: GitHub release downloads carry no CORS
