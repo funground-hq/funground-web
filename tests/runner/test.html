@@ -293,6 +293,65 @@ f.show()
   runner.stop();
 }
 
+
+log('keep');
+// ---- Keep (S-226): runner.keep(note) runs f.keep(note); studio/001.png, .py and .json each reach onFile once
+// Its own runner, made as Play's preview makes it (reuse: true): then a script that has ended keeps its Python and can still be kept.
+{
+  const runner = await createRunner({
+    canvas: document.createElement("canvas"), baseUrl: new URL("/runner/", location.href), reuse: true,
+    output: (text, stream) => lines.push({ stream, text }), onFrame: (n) => { frameCount = n; },
+    onFinish: (reason) => { finished = reason; }, onFile: (file) => files.push(file),
+  });
+  const start = (source, options) => {
+    frameCount = 0; finished = null; lines.length = 0; files.length = 0;
+    return runner.run(source, options);
+  };
+  const magic = (bytes, text) => text.split("").every((c, i) => bytes[i] === c.charCodeAt(0));
+  const animated = String.raw`import funground as f
+def setup():
+    f.size(120, 80)
+def draw():
+    f.background('gold')
+    f.circle(60, 40, 20)
+f.run()
+`;
+  await start(animated, { filename: "keeper.py" });
+  await until(() => frameCount >= 3, 30000, "frames before the keep");
+  const first = await runner.keep("I kept the gold one");
+  await sleep(700);                                              // the loop goes on: a file must not be sent again
+  const namesAfterFirst = files.map((f) => f.name);
+  const byName = Object.fromEntries(files.map((f) => [f.name, f]));
+  const record = byName["studio/001.json"] && JSON.parse(new TextDecoder().decode(byName["studio/001.json"].bytes));
+  const second = await runner.keep("A second one");
+  // a script that has finished drawing can still be kept
+  const script = String.raw`import funground as f
+f.size(60, 40)
+f.background('teal')
+f.show()
+`;
+  const started = await start(script, { filename: "done.py" });
+  await until(() => finished !== null, 30000, "the script to end").catch(() => {});
+  const ended = await runner.keep("after the end");
+  const endedNames = files.map((f) => f.name);
+  // stopped: nothing to keep, and nothing is written
+  await start(animated, { filename: "keeper.py" });
+  await until(() => frameCount >= 2, 30000, "frames before the stop");
+  await runner.stop();
+  files.length = 0;
+  const stopped = await runner.keep("too late");
+  await sleep(300);
+  report.scenarios.keeps = {
+    first, second, ended, stopped, endedNames, stoppedFiles: files.map((f) => f.name),
+    names: namesAfterFirst,
+    png: byName["studio/001.png"] && { type: byName["studio/001.png"].type, magic: magic(byName["studio/001.png"].bytes, "\x89PNG\r\n\x1a\n") },
+    py: byName["studio/001.py"] && { type: byName["studio/001.py"].type, same: new TextDecoder().decode(byName["studio/001.py"].bytes) === animated },
+    json: record && { type: byName["studio/001.json"].type, note: record.note, sketch: record.sketch, size: record.size },
+    scriptOk: started.ok,
+  };
+  runner.stop();
+}
+
 }
 // ---- a different backing scale is the page's business (devicePixelRatio); report what this run used
 report.scenarios.dpr = window.devicePixelRatio;
