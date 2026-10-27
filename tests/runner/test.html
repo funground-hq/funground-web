@@ -294,6 +294,47 @@ f.show()
 }
 
 
+log('web fonts');
+// ---- fonts from the web (S-230, D-119): f.load_font(address) downloads through the worker's fetchUrl the first time; the copy
+// (fonts/<name>) and fonts/sources.json reach onFile like any saved file; a second run given them back reads no network; an
+// address that cannot be reached gives funground's plain sentence. The font is one the test server serves on this origin.
+{
+  const address = `${location.origin}/runner/runtime/fonts/DejaVuSans-Bold.ttf.bin`;
+  const webFontRequests = async () => (await (await fetch("/requests.json")).json()).filter((r) => r.includes("DejaVuSans-Bold.ttf.bin"));
+  const sketch = (where) => String.raw`import funground as f
+f.size(200, 80)
+f.background('white')
+f.text_font(f.load_font('${where}'), 40)
+f.fill('black')
+f.text('Ag', 10, 10)
+f.show()
+`;
+  const result = {};
+  try {
+    await post("/mark", "");
+    const first = await start(sketch(address), { filename: "web_font.py" });
+    await until(() => finished !== null && files.length >= 2, 30000, "the kept font and its sources.json").catch(() => {});
+    const kept = Object.fromEntries(files.map((f) => [f.name, f.bytes]));
+    const sources = kept["fonts/sources.json"] ? JSON.parse(new TextDecoder().decode(kept["fonts/sources.json"])) : {};
+    result.first = { ok: first.ok, output: lines.map((l) => l.text), names: files.map((f) => f.name), sources, requests: await webFontRequests() };
+    runner.stop();
+
+    await post("/mark", "");
+    const second = await start(sketch(address), { filename: "web_font.py", files: kept });
+    await until(() => finished !== null, 30000, "the second run").catch(() => {});
+    result.second = { ok: second.ok, output: lines.map((l) => l.text), requests: await webFontRequests() };
+    runner.stop();
+
+    const third = await start(sketch("http://127.0.0.1:9/nofont.ttf"), { filename: "web_font_bad.py" });
+    await until(() => finished !== null || lines.length > 0, 30000, "the error").catch(() => {});
+    result.unreachable = { ok: third.ok, output: lines.map((l) => l.text) };
+    runner.stop();
+  } catch (error) {
+    result.error = String(error.message ?? error);
+  }
+  report.scenarios.web_fonts = result;
+}
+
 log('keep');
 // ---- Keep (S-226): runner.keep(note) runs f.keep(note); studio/001.png, .py and .json each reach onFile once
 // Its own runner, made as Play's preview makes it (reuse: true): then a script that has ended keeps its Python and can still be kept.
