@@ -112,6 +112,19 @@ function fontSupport(manifest, runtime) {
   return { fetchFont, checks };
 }
 
+// Fonts from the web (S-230, D-119): `f.load_font("https://...")` calls this the first time, then funground keeps the copy in
+// fonts/ beside the sketch with fonts/sources.json. Both are new files, so sendNewFiles passes them to the page, My files keeps
+// them, and the next run is given them back: it reads no network. The same synchronous request as fetchFont; the font's site
+// must allow the request (CORS), and funground turns a failure into one plain sentence (web.py, `_checked_url_fetcher`).
+function fetchUrl(address) {
+  const request = new XMLHttpRequest();
+  request.open("GET", address, false);
+  request.responseType = "arraybuffer";
+  request.send();
+  if (request.status !== 200) throw new Error(`HTTP ${request.status}`);
+  return new Uint8Array(request.response);
+}
+
 // ---- setup
 
 async function init({ runtimeUrl, pyodideUrl = PYODIDE }) {
@@ -240,7 +253,7 @@ async function run({ source, filename, width, height, scale, files, seed }) {
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
   session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest, postCameraRequest,
-                    fonts.fetchFont, py.toPy(fonts.checks));
+                    fonts.fetchFont, py.toPy(fonts.checks), fetchUrl);
   if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // the Session's own sketch: a repeatable run (goldens)
   try {
     session.start(source, filename);
