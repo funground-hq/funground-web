@@ -202,6 +202,18 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
     if script:
         checks["files: a script's SVG and GIF are reported"] = (bool(script["svg"]) and bool(script["gif"]) and script["svg"]["type"] == "image/svg+xml"
             and script["svg"]["has_svg"] and script["gif"]["magic"] and script["gif"]["type"] == "image/gif")
+    web = scenarios.get("web_fonts")
+    if web:
+        first, second, bad = web.get("first", {}), web.get("second", {}), web.get("unreachable", {})
+        name = "fonts/DejaVuSans-Bold.ttf.bin"
+        checks["web fonts: the first run downloads the address once and sends the copy and fonts/sources.json"] = bool(
+            first.get("ok") and sorted(first.get("names", [])) == [name, "fonts/sources.json"]
+            and first.get("sources", {}).get("DejaVuSans-Bold.ttf.bin", "").endswith("/runner/runtime/fonts/DejaVuSans-Bold.ttf.bin")
+            and len(first.get("requests", [])) == 1)
+        checks["web fonts: a second run given the kept files reads no network"] = bool(
+            second.get("ok") and not second.get("requests") and not second.get("output"))
+        checks["web fonts: an address that cannot be reached gives the plain sentence"] = (
+            "could not download" in "".join(bad.get("output", [])) and "Add file" in "".join(bad.get("output", [])))
     keeps = scenarios.get("keeps")
     if keeps:
         first, second, ended, stopped = keeps["first"], keeps["second"], keeps["ended"], keeps["stopped"]

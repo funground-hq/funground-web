@@ -188,12 +188,26 @@ def git_state(root: Path) -> dict:
 
 # ---- the examples
 
+def kept_web_fonts(folder: Path, names: set[str]) -> set[str]:
+    """Fonts from the web (S-230): an example that loads a font by its address keeps the copy in fonts/ with
+    fonts/sources.json ({file: address}). The copy of each address the code names, and the index, go with the example,
+    so Play runs it from the copy as the desktop does, without downloading."""
+    index = folder / "fonts" / "sources.json"
+    if not index.is_file():
+        return set()
+    kept = {f"fonts/{name}" for name, address in json.loads(index.read_text(encoding="utf-8")).items()
+            if address in names and (folder / "fonts" / name).is_file()}
+    return kept | {"fonts/sources.json"} if kept else set()
+
+
 def example_entry(path: Path, examples_root: Path) -> dict:
-    """One index row: id, title (first docstring line), source path, and the data files its code names."""
+    """One index row: id, title (first docstring line), source path, and the data files its code names (and the kept
+    copy of a font it loads by address)."""
     source = path.read_text(encoding="utf-8")
     docstring = ast.get_docstring(ast.parse(source)) or path.stem
     names = re.findall(r"""["']([^"'\n]+)["']""", source)
-    files = sorted({n for n in names if (path.parent / n).is_file() and (path.parent / n) != path})
+    files = {n for n in names if (path.parent / n).is_file() and (path.parent / n) != path}
+    files = sorted(files | kept_web_fonts(path.parent, set(names)))
     relative = path.relative_to(examples_root)
     return {"id": f"{relative.parts[-2]}-{path.stem}", "title": docstring.splitlines()[0],
             "source": relative.as_posix(), "files": files}
