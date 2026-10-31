@@ -2,7 +2,7 @@ r"""Test the camera in the browser runner, in headless Chrome (story S-172).
 
     C:\Projects\playground\.venv\Scripts\python.exe tools/test_camera.py
 
-Needs runner/runtime/ (tools/build_runtime.py) built from a funground with the camera (f.camera, Session.push_camera).
+Needs runner/runtime/ (tools/build_runtime.py) built from a funground with the camera (the camera library, Session.push_camera).
 Three cases, each in its own runner (tests/runner/camera.html):
 
   * live: Chrome's fake camera (a moving test pattern) feeds tests/runner/camera_sketch.py, which prints a pixel of each

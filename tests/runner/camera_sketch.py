@@ -1,8 +1,9 @@
 # Used by tools/test_camera.py (story S-172): draws Chrome's fake camera, prints what one pixel of each frame looks
 # like, then records half a second and saves it as a GIF.
 import funground as f
+from funground import camera
 
-cam = f.camera()
+cam = camera.open()
 clip = None
 
 
