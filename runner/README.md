@@ -135,8 +135,8 @@ not loaded. Design and message list: `docs/design/Web_Runner_Note.md` in fungrou
 - The microphone is opened when the sketch calls `mic.start()`: the browser asks permission, `microphone-worklet.js`
   (an AudioWorklet) posts chunks of 1024 mono samples, and the worker puts them into the ring buffer the desktop code
   fills. Until you allow it, `level()` is 0 and `pitch()` is `None`. A refusal is one line in the output. The
-  microphone is never played back. Choosing a microphone by name (`f.microphone("USB")`) is desktop-only.
-- `f.load_sound()` reads 16-bit WAV files here; OGG and MP3 raise a `ValueError` that says so.
+  microphone is never played back. Choosing a microphone by name (`sound.microphone("USB")`) is desktop-only.
+- `sound.load()` reads 16-bit WAV files here; OGG and MP3 raise a `ValueError` that says so.
 
 ### Try the sound (for a person, with ears)
 
