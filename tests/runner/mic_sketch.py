@@ -1,7 +1,8 @@
 """Listens to the microphone and prints each new loudest level it hears (used by tools/test_sound.py)."""
 import funground as f
+from funground import sound
 
-mic = f.microphone()
+mic = sound.microphone()
 loudest = 0.0
 
 
