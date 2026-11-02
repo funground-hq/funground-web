@@ -39,6 +39,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
   a run let it go, so the camera's light goes off. A refusal gives the sketch one line, "The camera is not available:
   ...", and no error. A page that runs sketches in an iframe must allow the camera: `<iframe allow="camera">`.
   Tested by `tools/test_camera.py` with Chrome's fake camera.
+- Models (S-232). `ml.pose(cam)` and `ml.hand(cam)` work with the same sketch as on a computer. See "Models" below.
 - `runner.info`: library versions, load times per stage and bytes fetched, as the first worker reported them.
 - Options for the VS Code panel (S-156, S-158). All are off or default by default, so `demo.html` and the website behave as
   before. They go in `createRunner({...})` unless the table says `run()`.
@@ -46,6 +47,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 | Option | Default | What it does |
 |---|---|---|
 | `pyodideUrl` | jsDelivr (in `worker.js`) | The folder Pyodide loads from. |
+| `onnxruntimeUrl` (S-232) | jsDelivr, one exact version (in `worker.js`) | The folder `onnxruntime-web` loads from, for `ml.pose()` and `ml.hand()`. It must hold `ort.wasm.mjs` and the `.wasm` file beside it. |
 | `runtimeUrl` | `runtime/` under `baseUrl` | The folder holding `manifest.json` and the wheels. A manifest entry with role `dependency` is installed from there instead of PyPI. |
 | `reuse` (D-083) | `false` | Run the next sketch in the same worker (the same Python) when the last one has ended, or stops when asked: a re-run takes about 0.1 s instead of loading Python again. funground's `Session` starts each sketch afresh. A sketch that does not stop within a second (`while True:`, or a long `setup()`) still has its worker ended, and a new Python loads (seconds). |
 | `onRestart` | none | With `reuse`: called when that happens, so the page can say why the next run waits. |
@@ -120,8 +122,36 @@ first time it opens a bundled font: a sketch with no text fetches none, plain te
 fallbacks come only for emoji, symbols or Devanagari. There is no list of names to keep complete. It works on every host,
 including one that compresses fonts (GitHub Pages does). A font whose bytes differ from the manifest gives one clear error naming it.
 `runner.info.fonts` is `"on open"`. Design and numbers: `RESULTS.md`, section 5.
+It also builds `funground_ml-*.whl` from the checkout's `ml/` folder (S-232; `--ml` names another) and writes `models.json`.
 `build_runtime.py --offline` rebuilds the funground wheel and the examples without downloading, keeping the
 C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`).
+
+## Models (S-232)
+
+`ml.pose(cam)` and `ml.hand(cam)` (the `funground-ml` package) find a body or a hand. The sketch is the same file as on a computer
+and has no `async`. Design: `docs/design/Web_Runner_Note.md` (Models) and `ML_Package_Note.md` in funground.
+
+- **The models worker.** `models-worker.js` is a module worker that `worker.js` starts the first time a sketch asks for a model, so a
+  sketch that asks for none pays nothing. Inference runs there, beside the sketch, never inside its step. `worker.js` relays each picture
+  to it (the buffer is transferred) and, between two steps, pushes each answer into funground's `Session` (`push_models`). At most one picture is in flight for each source and task; the others are dropped.
+  So `ml.pose(cam)` gives the newest answer the browser has: `None` until the first arrives, and it can be one frame behind.
+  `models-glue.js` does the pictures-in, points-out work (the JavaScript twin of funground-ml's `_glue.py`: the same thresholds and the same
+  rule for reusing a found box).
+- **onnxruntime-web.** Loaded in the models worker from `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/` (`ONNXRUNTIME` in
+  `worker.js`): `ort.wasm.mjs`, the wasm build only, with `wasmPaths` at the same folder. The version is exact; it was the newest that
+  was at least two weeks old when it was pinned (2 November 2026). The runner option `onnxruntimeUrl` replaces the folder (it must end with
+  the same files). It has no telemetry to switch off: at that version the loader fetches its own `.wasm` file and nothing else.
+- **The model files.** `tools/build_runtime.py` writes `runtime/models.json` (manifest role `models`) from funground-ml's
+  `_models.py`: the Hugging Face address (pinned to a commit), size and SHA-256 of the four files, and which two make each task. The
+  worker downloads a file once, checks it with `crypto.subtle.digest`, and keeps it in Cache Storage (`funground-models-v1`). Later runs, offline too,
+  read the kept copy, which is checked again when read. The first time, the sketch's output gets one line, the desktop's with the
+  folder wording changed: `Downloading the pose model, 18 MB, once. After that the browser keeps a copy.` (`8 MB` for the hand.) With no connection and no copy, or a file that fails its check, the sketch gets one sentence
+  (the desktop's, ending "after that the browser keeps a copy") and `None`.
+- **On demand.** A sketch (or a `.py` file beside it) that contains `from funground import ml` makes `worker.js` install the
+  `funground-ml` wheel (`runtime/wheels/funground_ml-*.whl`, pure Python, manifest role `funground-ml`), without its dependencies. No numpy, Pillow or onnxruntime is
+  loaded in Python. `ON_DEMAND` has the entry (`wheels` and `matches`); `tools/check_on_demand.py` still checks the pygame list.
+- **Tested** by `tools/test_models.py` (see "Demo, tests"). Chrome's WebAssembly runs on one thread here: Play is not cross-origin isolated, so `onnxruntime-web` uses
+  one thread.
 
 ## Sound and the microphone (S-137)
 
@@ -167,6 +197,11 @@ drawing should not touch the audio); and a microphone that comes back out of the
 - `tools/test_sound.py --funground <checkout>`: sound and the microphone (S-137) in headless Chrome with a fake microphone:
   the examples' sound commands against CPython's, audible output at the speakers, the fake microphone's level reaching
   the sketch, and the skip-before-a-gesture line. Report in `tests/out/sound_report.json`.
+- `tools/test_models.py --ml-python <python with funground-ml>`: `ml.pose()` and `ml.hand()` (S-232) in headless Chrome, started by
+  `tools/chrome_page.mjs` (Node and `playwright-core`, its own temporary profile). The same sketch (`tests/runner/models_sketch.py`) runs on the desktop
+  with `onnxruntime` and in the runner with `onnxruntime-web`, on funground's two test photographs; every point must agree within 5 px.
+  It also checks the download line and the cache (a second run reads the kept copy and asks the model site for nothing), the no-connection and wrong-checksum sentences, a camera sketch that loads no numpy or Pillow, and measures
+  answers a second. The model site is answered from `ml/tests/.models` (`--live` downloads from huggingface.co for real). Report in `tests/out/models_report.json`.
 - Numbers and how they were measured: `RESULTS.md`.
 
 ## Frames

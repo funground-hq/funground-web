@@ -36,6 +36,8 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   script, or stop) that wrote it, and again if the sketch writes it again. `name` is relative to the sketch's folder, `bytes` is
  *   the whole file and `type` its MIME type ("image/png", "application/pdf", "image/svg+xml", "image/gif", "video/mp4")
  * @param {string | URL} [options.pyodideUrl]  the folder Pyodide loads from (default: jsDelivr, in worker.js)
+ * @param {string | URL} [options.onnxruntimeUrl]  the folder onnxruntime-web loads from, for ml.pose() and ml.hand() (default: jsDelivr at one
+ *   exact version, in worker.js). It holds ort.wasm.mjs and the .wasm file beside it
  * @param {string | URL} [options.runtimeUrl]  the folder holding manifest.json and the wheels (default: runtime/ under baseUrl)
  * @param {boolean} [options.spare]  while a sketch runs, keep the next run's worker loaded too, so that a re-run (an editor
  *   re-running on every edit) starts at once instead of waiting for Python to load; costs a second Python's memory (default false)
@@ -49,7 +51,7 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
  * @returns {Promise<{info: object, run: Function, stop: Function, keep: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
@@ -69,6 +71,9 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   const workerScript = await workerScriptUrl(workerUrl);
   const runtimeUrl = new URL(runtimeOption ?? "runtime/", baseUrl).href;
   const pyodide = pyodideUrl === undefined ? undefined : new URL(pyodideUrl, baseUrl).href;
+  const onnxruntime = onnxruntimeOption === undefined ? undefined : new URL(onnxruntimeOption, baseUrl).href.replace(/\/?$/, "/");
+  // The models worker and its glue are started by worker.js, on the first request for a model; they come from the same place as worker.js.
+  const modelsScripts = { worker: String(await workerScriptUrl(new URL("models-worker.js", baseUrl))), glue: String(await workerScriptUrl(new URL("models-glue.js", baseUrl))) };
   let worker = startWorker();            // the worker for the next run, or the run in progress
   let next = null;                       // with `spare`: the worker for the run after the one in progress
   let run = null;                        // the run in progress, or null
@@ -97,7 +102,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       };
     });
     slot.ready.catch(() => {});                                    // reported where it is awaited
-    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide });
+    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts });
     console.debug("runner: worker started");
     return slot;
   }
