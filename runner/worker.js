@@ -56,13 +56,14 @@
 // desktop's microphone code fills, so level(), pitch() and the rest are unchanged. The camera is the same way round:
 // the page sends frames, and funground keeps the latest for the sketch's next draw().
 //
-// Models (S-232). ml.pose(cam) and ml.hand(cam) find a body or a hand with the same ONNX files as the desktop, run by
-// onnxruntime-web. That takes tens of milliseconds, so it runs in a worker of its own (models-worker.js), started here the
+// Models (S-232, S-233). ml.pose(cam), ml.hand(cam) and ml.person(cam) find a body, a hand or the outline of a person with the
+// same ONNX files as the desktop, run by onnxruntime-web. That takes tens of milliseconds, so it runs in a worker of its own (models-worker.js), started here the
 // first time the sketch asks, and never inside the sketch's step. funground's Session is given `postModelsRequest`; a picture
 // goes out with its buffer transferred, and at most one is in flight for each source and task (funground drops the others). The
 // models worker answers with a message, which this worker handles between two steps, so a result never appears in the middle
-// of a frame: it is pushed into the Session (`push_models`), and the sketch's next ml.pose() call reads it. The answer is
-// therefore the newest result the browser has, and may be one frame behind (contract ML3).
+// of a frame: it is pushed into the Session (`push_models` for points, `push_models_mask` for the person's mask), and the
+// sketch's next ml.pose() call reads it. The answer is therefore the newest result the browser has, and may be one frame behind
+// (contract ML3). The mask comes as bytes of the mask's own size (256 x 256); funground (Cairo, in C) stretches it over the picture.
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
@@ -265,6 +266,10 @@ def push_models(session, task, key, points, score, width, height):
         flat.frombytes(points.to_bytes())
     session.push_models(task, key, flat, score, width, height)
 
+def push_models_mask(session, task, key, mask, mask_width, mask_height, width, height):
+    """Hand the person's mask from the page to the session: mask is a Uint8Array of mask_width * mask_height bytes (to_bytes copies it once)."""
+    session.push_models_mask(task, key, mask.to_bytes(), mask_width, mask_height, width, height)
+
 def check_real_libraries():
     """Nothing is stubbed: the three C libraries are compiled extension modules (.so), and funground imports them."""
     versions = {}
@@ -360,7 +365,9 @@ function startModelsWorker() {
   modelsWorker.onmessage = (e) => {
     const message = e.data;
     try {
-      if (message.type === "result") {
+      if (message.type === "result" && message.mask) {
+        if (session) py.globals.get("push_models_mask")(session, message.task, message.key, message.mask, message.maskWidth, message.maskHeight, message.width, message.height);
+      } else if (message.type === "result") {
         // `points ?? undefined`: Pyodide turns a JavaScript null into its own null object, and funground wants None
         if (session) py.globals.get("push_models")(session, message.task, message.key, message.points ?? undefined, message.score, message.width, message.height);
       } else if (message.type === "say") {
