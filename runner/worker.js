@@ -4,7 +4,9 @@
 // The page drives it; every message has a `type`.
 //
 //   page -> worker
-//     init   {runtimeUrl?, pyodideUrl?}     load Pyodide and install everything; answers `ready`
+//     init   {runtimeUrl?, pyodideUrl?, onnxruntimeUrl?, modelsScripts?}   load Pyodide and install everything; answers `ready`.
+//                                           `onnxruntimeUrl` is the folder onnxruntime-web loads from (default below); `modelsScripts`
+//                                           is {worker, glue}, the addresses of models-worker.js and models-glue.js
 //     run    {source, filename, width, height, scale, files, seed?}   start the file; answers `started`. `files` maps a path
 //                                           to bytes: data beside the sketch, and other .py files it may import
 //     step   {now}                          one display frame, `now` in seconds; answers `stepped`
@@ -30,6 +32,7 @@
 //     camera   {command, fields}                "start" {width, height}, "stop" or "close": the sketch wants camera frames at that
 //                                               size, or lets the camera go (camera.js)
 //     stopped  {}                               the run asked to stop has ended; the worker is ready for another `run`
+//     (the models worker, models-worker.js, is started by this worker, not by the page: see Models below)
 //     kept     {id, ok, base?, files?, reason?}  the answer to `keep`: `files` names the files it wrote (each also sent as a
 //                                               `file` message just before this one); `ok: false` with a plain `reason` when
 //                                               there is no run to keep (it was stopped, or has ended)
@@ -52,9 +55,20 @@
 // The microphone is the reverse: the page's AudioWorklet posts chunks, and they go into the ring buffer that the
 // desktop's microphone code fills, so level(), pitch() and the rest are unchanged. The camera is the same way round:
 // the page sends frames, and funground keeps the latest for the sketch's next draw().
+//
+// Models (S-232). ml.pose(cam) and ml.hand(cam) find a body or a hand with the same ONNX files as the desktop, run by
+// onnxruntime-web. That takes tens of milliseconds, so it runs in a worker of its own (models-worker.js), started here the
+// first time the sketch asks, and never inside the sketch's step. funground's Session is given `postModelsRequest`; a picture
+// goes out with its buffer transferred, and at most one is in flight for each source and task (funground drops the others). The
+// models worker answers with a message, which this worker handles between two steps, so a result never appears in the middle
+// of a frame: it is pushed into the Session (`push_models`), and the sketch's next ml.pose() call reads it. The answer is
+// therefore the newest result the browser has, and may be one frame behind (contract ML3).
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
+// onnxruntime-web, from jsDelivr at one exact version (the newest that was at least two weeks old when it was pinned: S-232, 2 November 2026).
+// The folder holds ort.wasm.mjs (the library, wasm only) and the .wasm file it loads. The runner's `onnxruntimeUrl` option replaces it.
+const ONNXRUNTIME = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 
 // Packages only some sketches need, loaded by run() when the file calls one of the functions listed (a call is a
 // name followed by "(", so `f.get(x, y)` counts and `get` alone does not). Python imports cannot wait for a
@@ -66,22 +80,41 @@ const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide dist
 //   gifs:     funground writes a GIF with Pillow (export/motion.py), importing it when the save runs: `save_gif(...)`, or
 //             `save("x.gif")`, where the file name is the signal and not the call (`contains`). An MP4 needs ffmpeg, which a
 //             browser does not have: saving one raises funground's own "cannot find ffmpeg" error.
+//   models:   `from funground import ml` imports funground-ml, a pure-Python wheel from our runtime folder (`wheels`, by manifest
+//             role). Under the runner it needs no numpy, Pillow or onnxruntime: the models run in the models worker. A sketch
+//             is recognised by its import (`matches`, regular expressions), because a call such as pose( is too common a word.
 const ON_DEMAND = [
   { packages: ["pygame-ce", "pillow"], calls: ["load_image", "load_clip", "get", "load_pixels", "update_pixels", "filter", "apply_filter", "resize", "mask", "remove_color", "remove_background", "tint", "spectrogram"] },
   { packages: ["pillow"], calls: ["save_gif"], contains: [".gif"] },
+  { wheels: ["funground-ml"], matches: [
+    /\bfrom\s+funground\s+import\s+(?:\([^)]*\bml\b|[^\n#]*\bml\b)/,       // from funground import camera, ml    (also in brackets)
+    /\bfrom\s+funground\.ml\s+import\b/, /\bimport\s+funground\.ml\b/, /\b(?:from|import)\s+funground_ml\b/,
+  ] },
 ];
 
-function packagesFor(source) {
-  const wanted = new Set();
-  for (const { packages, calls, contains = [] } of ON_DEMAND) {
-    if (new RegExp(String.raw`\b(${calls.join("|")})\s*\(`).test(source) || contains.some((text) => source.includes(text))) packages.forEach((name) => wanted.add(name));
+// What the sources (the sketch, and the .py files beside it) need: Pyodide packages and wheels of our own, each once.
+function neededFor(sources) {
+  const packages = new Set(), wheels = new Set();
+  for (const { packages: pyodide = [], wheels: own = [], calls = [], contains = [], matches = [] } of ON_DEMAND) {
+    const wanted = sources.some((source) =>
+      (calls.length > 0 && new RegExp(String.raw`\b(${calls.join("|")})\s*\(`).test(source))
+      || contains.some((text) => source.includes(text)) || matches.some((pattern) => pattern.test(source)));
+    if (wanted) {
+      pyodide.forEach((name) => packages.add(name));
+      own.forEach((name) => wheels.add(name));
+    }
   }
-  return [...wanted];
+  return { packages: [...packages], wheels: [...wheels] };
 }
 
 let py = null;
 let fonts = null;                       // {fetchFont, checks} for every Session (fontSupport)
 let session = null;
+let runtimeFolder = null;               // {url, manifest} of the runtime folder (for wheels installed on demand)
+let onnxruntimeUrl = ONNXRUNTIME;
+let modelsScripts = null;               // {worker, glue}: where models-worker.js and models-glue.js are
+let modelsWorker = null;                // started by the first request for a model
+const installed = new Set();            // wheels of our own already installed in this Python
 let sketchFile = "sketch.py";
 let known = new Map();                  // file name -> "size:modified" for each file of the run's folder already seen or sent
 
@@ -127,8 +160,10 @@ function fetchUrl(address) {
 
 // ---- setup
 
-async function init({ runtimeUrl, pyodideUrl = PYODIDE }) {
+async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts }) {
   const runtime = new URL(runtimeUrl ?? "runtime/", import.meta.url);
+  onnxruntimeUrl = onnxruntimeOption ?? ONNXRUNTIME;
+  modelsScripts = scripts ?? { worker: new URL("models-worker.js", import.meta.url).href, glue: new URL("models-glue.js", import.meta.url).href };
   const timings = {};
   let t = performance.now();
   const lap = (name) => { timings[name] = Math.round(performance.now() - t); t = performance.now(); console.debug(`runner: ${name} ${timings[name]} ms`); };
@@ -164,6 +199,7 @@ else:
 await micropip.install(funground_wheel, deps=False)
 `);
   fonts = fontSupport(manifest, runtime);
+  runtimeFolder = { url: runtime, manifest };
   lap("wheels");
 
   py.runPython(PYTHON_GLUE);
@@ -221,6 +257,14 @@ def push_camera(session, pixels, width, height):
     """Hand a camera frame (a Uint8ClampedArray of RGBA) from the page to the session (to_bytes copies it once)."""
     session.push_camera(pixels.to_bytes(), width, height)
 
+def push_models(session, task, key, points, score, width, height):
+    """Hand a model result from the page to the session: points is a Float64Array x0, y0, x1, y1, ... or None for nobody."""
+    flat = None
+    if points is not None:
+        flat = array("d")
+        flat.frombytes(points.to_bytes())
+    session.push_models(task, key, flat, score, width, height)
+
 def check_real_libraries():
     """Nothing is stubbed: the three C libraries are compiled extension modules (.so), and funground imports them."""
     versions = {}
@@ -249,11 +293,14 @@ async function run({ source, filename, width, height, scale, files, seed }) {
   }
   sendNewFiles({ record: true });                                          // what is there now is not the sketch's: only its later writes are sent,
                                                                            // a passed-in file too once the sketch rewrites it (a kept take.gif, S-221)
-  await py.loadPackage(packagesFor(source), { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
+  const sources = [source, ...Object.entries(files ?? {}).filter(([name]) => name.endsWith(".py")).map(([, bytes]) => new TextDecoder().decode(bytes))];
+  const needed = neededFor(sources);
+  await py.loadPackage(needed.packages, { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
+  await installWheels(needed.wheels);
   const { Session } = py.pyimport("funground.web");
   sketchFile = filename;
   session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest, postCameraRequest,
-                    fonts.fetchFont, py.toPy(fonts.checks), fetchUrl);
+                    fonts.fetchFont, py.toPy(fonts.checks), fetchUrl, postModelsRequest);
   if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // the Session's own sketch: a repeatable run (goldens)
   try {
     session.start(source, filename);
@@ -264,6 +311,21 @@ async function run({ source, filename, width, height, scale, files, seed }) {
   sendNewFiles();                                                          // a script saves while it runs
   const [canvasWidth, canvasHeight] = session.canvas_size.toJs();
   post({ type: "started", width: canvasWidth, height: canvasHeight, running: session.running });
+}
+
+// Wheels of our own that a sketch needs (ON_DEMAND), by their role in the manifest, without their dependencies: funground-ml asks
+// for onnxruntime, numpy and Pillow, which a page never uses (the models run in the models worker).
+async function installWheels(roles) {
+  const wanted = roles.filter((role) => !installed.has(role));
+  if (!wanted.length) return;
+  const urls = wanted.map((role) => {
+    const file = runtimeFolder.manifest.files.find((f) => f.role === role);
+    if (!file) throw new Error(`the runtime has no ${role} wheel: build it with tools/build_runtime.py`);
+    return new URL(file.name, runtimeFolder.url).href;
+  });
+  py.globals.set("own_wheels", urls);
+  await py.runPythonAsync("import micropip\nawait micropip.install(list(own_wheels), deps=False)");
+  wanted.forEach((role) => installed.add(role));
 }
 
 function step({ now }) {
@@ -287,6 +349,44 @@ function camera({ pixels, width, height }) {
 
 function cameraUnavailable({ reason }) {
   session?.camera_unavailable(reason);
+}
+
+// ---- models
+
+// The models worker comes up with the first request, so a sketch that asks for no model never pays for it. Its answers are
+// ordinary messages, handled here between two steps.
+function startModelsWorker() {
+  modelsWorker = new Worker(modelsScripts.worker, { type: "module" });
+  modelsWorker.onmessage = (e) => {
+    const message = e.data;
+    try {
+      if (message.type === "result") {
+        // `points ?? undefined`: Pyodide turns a JavaScript null into its own null object, and funground wants None
+        if (session) py.globals.get("push_models")(session, message.task, message.key, message.points ?? undefined, message.score, message.width, message.height);
+      } else if (message.type === "say") {
+        post({ type: "output", stream: "stdout", text: message.text });
+      } else if (message.type === "unavailable") {
+        session?.models_unavailable(message.task, message.reason);
+      }
+    } catch (error) {
+      post({ type: "output", stream: "stderr", text: `A model answer could not be used: ${String(error.message ?? error).split("\n").pop()}` });
+    }
+  };
+  modelsWorker.onerror = (e) => post({ type: "output", stream: "stderr", text: `The models worker failed to load: ${e.message}` });
+  modelsWorker.postMessage({
+    type: "init", onnxruntimeUrl,
+    tableUrl: new URL("models.json", runtimeFolder.url).href, glueUrl: modelsScripts.glue,
+  });
+}
+
+// on_models(command, fields) from funground. `fields` is a Python dict that dies when the call returns, so what is needed is
+// copied out: the picture's bytes into a new buffer, which is transferred.
+function postModelsRequest(command, fields) {
+  if (command === "close") return modelsWorker?.postMessage({ type: "close" });
+  if (!modelsWorker) startModelsWorker();
+  const request = fields.toJs({ dict_converter: Object.fromEntries });
+  const pixels = new Uint8Array(request.pixels);                           // a copy that is ours to transfer
+  modelsWorker.postMessage({ type: "frame", ...request, pixels: pixels.buffer }, [pixels.buffer]);
 }
 
 function event({ kind, x, y, button, key, keyCode, delta }) {

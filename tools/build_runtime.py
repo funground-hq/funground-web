@@ -14,6 +14,10 @@ Standard library only; nothing is installed. It writes, under runner/runtime/ (g
                    "completions": the VS Code extension's suggestions (S-205) are made from it, so they always match the
                    funground this runtime runs
     examples/      the checkout's gallery, Session 1 and course examples, with an index.json, for demo.html and Play
+    wheels/funground_ml-*.whl  funground-ml (S-232), built from the checkout's ml/ folder: pure Python, role "funground-ml".
+                   worker.js installs it, without its dependencies, only for a sketch that imports ml (ON_DEMAND)
+    models.json    the model files funground-ml uses (address, size, SHA-256, and which two make each task), written from
+                   ml/funground_ml/_models.py, so that the browser and the desktop check the same files; role "models"
     manifest.json  every file with its role, size and SHA-256; worker.js installs the wheels it lists
 
 Why the files are copied here and not fetched from GitHub by the page: a release download carries no
@@ -34,6 +38,7 @@ import argparse
 import ast
 import base64
 import hashlib
+import importlib.util
 import json
 import re
 import shutil
@@ -148,24 +153,51 @@ def record_line(path: str, data: bytes) -> str:
     return f"{path},sha256={digest},{len(data)}"
 
 
-def build_funground_wheel(root: Path, out: Path) -> Path:
+def build_funground_wheel(root: Path, out: Path, licences: tuple[str, ...] = ("LICENSE", "THIRD_PARTY_LICENSES.md"),
+                          licence_root: Path | None = None) -> Path:
+    """The wheel of the project in *root* (its pyproject.toml says what goes in). funground-ml (S-232) is built the same way
+    from <checkout>/ml, with the checkout's LICENSE (ml/ has none of its own)."""
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     name, version = project["project"]["name"], project["project"]["version"]
-    dist_info = f"{name}-{version}.dist-info"
+    stem = name.replace("-", "_")                                      # PEP 427: a wheel's file and folder names use underscores
+    dist_info = f"{stem}-{version}.dist-info"
     entries: dict[str, bytes] = {p.relative_to(root).as_posix(): p.read_bytes() for p in package_files(root, project)}
-    for licence in ("LICENSE", "THIRD_PARTY_LICENSES.md"):
-        entries[f"{dist_info}/licenses/{licence}"] = (root / licence).read_bytes()
+    for licence in licences:
+        entries[f"{dist_info}/licenses/{licence}"] = ((licence_root or root) / licence).read_bytes()
     entries[f"{dist_info}/METADATA"] = metadata(project).encode()
     entries[f"{dist_info}/WHEEL"] = b"Wheel-Version: 1.0\nGenerator: funground-web tools/build_runtime.py\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
     record = [record_line(path, data) for path, data in entries.items()] + [f"{dist_info}/RECORD,,"]
     entries[f"{dist_info}/RECORD"] = ("\n".join(record) + "\n").encode()
-    target = out / f"{name}-{version}-py3-none-any.whl"
+    target = out / f"{stem}-{version}-py3-none-any.whl"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as wheel:
         for path, data in entries.items():
             info = zipfile.ZipInfo(path, ZIP_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             wheel.writestr(info, data)
+    return target
+
+
+def write_models_table(ml: Path, out: Path) -> Path:
+    """models.json: the table of funground-ml's model files, read from ml/funground_ml/_models.py, the one place they are
+    written down. models-worker.js downloads these addresses and checks these sizes and SHA-256 values, so the browser and
+    the desktop use byte for byte the same four files. (The file is loaded by its path: it needs nothing else of the package.)"""
+    path = ml / "funground_ml" / "_models.py"
+    spec = importlib.util.spec_from_file_location("_funground_ml_models", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module                                    # dataclasses look their module up here
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+    table = {
+        "source": "ml/funground_ml/_models.py",
+        "models": {m.name: {"url": m.url, "file": m.file, "size": m.size, "sha256": m.sha256, "licence": m.licence}
+                   for m in module.MODELS.values()},
+        "tasks": {task: list(names) for task, names in module.TASKS.items()},
+    }
+    target = out / "models.json"
+    target.write_text(json.dumps(table, indent=1), encoding="utf-8")
     return target
 
 
@@ -235,6 +267,7 @@ def copy_examples(root: Path, out: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--funground", required=True, type=Path, help="a funground checkout (the branch to run in the browser)")
+    parser.add_argument("--ml", type=Path, help="funground-ml's folder (default: ml/ in the funground checkout)")
     parser.add_argument("--out", type=Path, default=REPO / "runner" / "runtime", help="default: runner/runtime")
     parser.add_argument("--offline", action="store_true",
                         help="do not download: keep the C-extension wheels already in the output folder (checked against manifest.json)")
@@ -246,11 +279,14 @@ def main() -> None:
     if examples.exists():
         shutil.rmtree(examples)
     examples.mkdir()
-    for old in wheels.glob("funground-*.whl"):
+    for old in [*wheels.glob("funground-*.whl"), *wheels.glob("funground_ml-*.whl")]:
         old.unlink()
+    ml = (args.ml or root / "ml").resolve()
 
     c_wheels = keep_c_wheels(wheels, out / "manifest.json") if args.offline else download_c_wheels(wheels)
     fg_wheel = build_funground_wheel(root, wheels)
+    ml_wheel = build_funground_wheel(ml, wheels, licences=("LICENSE",), licence_root=root)
+    models_table = write_models_table(ml, out)
     count = copy_examples(root, examples)
     fonts = copy_fonts(root, out / "fonts")
     completions = out / "completions.json"
@@ -261,6 +297,8 @@ def main() -> None:
 
     files = [{"name": f"wheels/{w.name}", "role": "c-extension", "size": w.stat().st_size, "sha256": sha256(w.read_bytes())} for w in c_wheels]
     files.append({"name": f"wheels/{fg_wheel.name}", "role": "funground", "size": fg_wheel.stat().st_size, "sha256": sha256(fg_wheel.read_bytes())})
+    files.append({"name": f"wheels/{ml_wheel.name}", "role": "funground-ml", "size": ml_wheel.stat().st_size, "sha256": sha256(ml_wheel.read_bytes())})
+    files.append({"name": models_table.name, "role": "models", "size": models_table.stat().st_size, "sha256": sha256(models_table.read_bytes())})
     files += [{"name": f"fonts/{f.name}", "role": "font", "font": f.name[:-len(FONT_URL_SUFFIX)], "size": f.stat().st_size,
                "sha256": sha256(f.read_bytes())} for f in fonts]
     files.append({"name": completions.name, "role": "completions", "size": completions.stat().st_size, "sha256": sha256(completions.read_bytes())})
