@@ -1,18 +1,20 @@
-// The models worker (story S-232, docs/design/Web_Runner_Note.md in funground): finds a body or a hand in a picture with
-// onnxruntime-web, so that ml.pose(cam) and ml.hand(cam) work in a page.
+// The models worker (stories S-232, S-233, docs/design/Web_Runner_Note.md in funground): finds a body, a hand or the outline of a
+// person in a picture with onnxruntime-web, so that ml.pose(cam), ml.hand(cam) and ml.person(cam) work in a page.
 //
 // worker.js (the one that runs Python) starts this worker the first time a sketch asks for a model. Inference takes tens of
 // milliseconds and runs here, beside the sketch, so it never holds up the sketch's step. Messages are like worker.js's.
 //
 //   worker.js -> here
 //     init   {onnxruntimeUrl, tableUrl, glueUrl}   where onnxruntime-web is (a folder), the table of model files (models.json) and models-glue.js
-//     frame  {task, key, pixels, width, height}    find the "pose" or "hand" in these RGBA bytes (an ArrayBuffer, transferred);
+//     frame  {task, key, pixels, width, height}    find the "pose", "hand" or "person" in these RGBA bytes (an ArrayBuffer, transferred);
 //                                                  `key` is the source they came from
 //     close  {}                                    the run ended: forget every source (the loaded models stay)
 //
 //   here -> worker.js
-//     result      {task, key, points, score, width, height}   `points` is a Float64Array x0, y0, x1, y1, ... in the picture's
-//                                                  pixels (its buffer is transferred), or null when nobody is there
+//     result      {task, key, points, score, width, height}   "pose" and "hand": `points` is a Float64Array x0, y0, x1, y1, ... in
+//                                                  the picture's pixels (its buffer is transferred), or null when nobody is there
+//     result      {task, key, mask, maskWidth, maskHeight, width, height}   "person": `mask` is a Uint8Array of the mask's own
+//                                                  size (256 x 256, its buffer is transferred): 0 is not the person, 255 is
 //     say         {text}                           one line for the learner's output (the first download)
 //     unavailable {task, reason}                   the task cannot run (no connection for the download, a file that fails
 //                                                  its check, ...): one plain sentence
@@ -30,7 +32,7 @@ const post = (message, transfer = []) => postMessage(message, transfer);
 
 let settings = null;                  // {onnxruntimeUrl, tableUrl, glueUrl}
 let loaded = null;                    // Promise of {ort, glue, table}: the library, started on the first frame
-const tasks = new Map();              // task -> Promise of {detector, landmarks}: the two sessions
+const tasks = new Map();              // task -> Promise of the task's sessions (two for "pose" and "hand", one for "person")
 const finders = new Map();            // "task:key" -> that source's finder (it keeps the box to reuse)
 let queue = Promise.resolve();        // frames are worked on one at a time
 
@@ -98,7 +100,8 @@ async function modelBytes(model, cache, task) {
   return bytes;
 }
 
-/** The two sessions of a task. The first time a file has to be downloaded, one line says so, as the desktop's does. */
+/** The sessions of a task, in the order of models.json (a detector and a landmark model, or the one model of "person"). The first
+ *  time a file has to be downloaded, one line says so, as the desktop's does. */
 function sessionsFor(task) {
   if (!tasks.has(task)) {
     const made = (async () => {
@@ -116,7 +119,7 @@ function sessionsFor(task) {
         const bytes = await modelBytes(model, cache, task);
         sessions.push(await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ["wasm"], graphOptimizationLevel: "all" }));
       }
-      return { detector: sessions[0], landmarks: sessions[1] };
+      return sessions;
     })();
     made.catch(() => tasks.delete(task));                 // the next frame may try again
     tasks.set(task, made);
@@ -129,10 +132,15 @@ function sessionsFor(task) {
 async function find({ task, key, pixels, width, height }) {
   try {
     const { ort, glue } = await library();
-    const { detector, landmarks } = await sessionsFor(task);
+    const sessions = await sessionsFor(task);
     const id = `${task}:${key}`;
-    if (!finders.has(id)) finders.set(id, glue.createFinder(task, ort, detector, landmarks));
+    if (!finders.has(id)) finders.set(id, glue.createFinder(task, ort, sessions));
     const found = await finders.get(id).find({ rgba: new Uint8Array(pixels), width, height });
+    if (task === "person") {
+      const { mask, maskWidth, maskHeight } = found;
+      post({ type: "result", task, key, mask, maskWidth, maskHeight, width, height }, [mask.buffer]);
+      return;
+    }
     const points = found === null ? null : found.points;
     post({ type: "result", task, key, points, score: found === null ? 0 : found.score, width, height }, points ? [points.buffer] : []);
   } catch (error) {
