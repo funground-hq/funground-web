@@ -85,7 +85,7 @@ const ONNXRUNTIME = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 //             role). Under the runner it needs no numpy, Pillow or onnxruntime: the models run in the models worker. A sketch
 //             is recognised by its import (`matches`, regular expressions), because a call such as pose( is too common a word.
 const ON_DEMAND = [
-  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "load_clip", "get", "load_pixels", "update_pixels", "filter", "apply_filter", "resize", "mask", "remove_color", "remove_background", "tint", "spectrogram"] },
+  { packages: ["pygame-ce", "pillow"], calls: ["load_image", "load_clip", "get", "load_pixels", "update_pixels", "filter", "apply_filter", "resize", "mask", "remove_color", "remove_background", "outline", "tint", "spectrogram"] },
   { packages: ["pillow"], calls: ["save_gif"], contains: [".gif"] },
   { wheels: ["funground-ml"], matches: [
     /\bfrom\s+funground\s+import\s+(?:\([^)]*\bml\b|[^\n#]*\bml\b)/,       // from funground import camera, ml    (also in brackets)
