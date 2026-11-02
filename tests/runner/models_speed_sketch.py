@@ -1,4 +1,4 @@
-# Used by tools/test_models.py (story S-232): how many answers a second the models give in a browser.
+# Used by tools/test_models.py (stories S-232, S-233): how many answers a second the models give in a browser.
 # A new picture every frame (the photograph with a dot drawn on it), so every frame is sent. TASK and PHOTO are put in
 # front by the test, as in models_sketch.py.
 import time
@@ -7,7 +7,7 @@ import funground as f
 from funground import host_services, ml
 
 photo = f.load_image(PHOTO)
-find = ml.pose if TASK == "pose" else ml.hand
+find = {"pose": ml.pose, "hand": ml.hand, "person": ml.person}[TASK]
 SECONDS = 8
 started = None
 g = None

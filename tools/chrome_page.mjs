@@ -1,13 +1,14 @@
 // Open one page in headless Chrome with Playwright and keep it open until told to stop (story S-232, tools/test_models.py).
 //
-//   node tools/chrome_page.mjs --url http://127.0.0.1:PORT/tests/runner/models.html --hf-dir DIR [--flag --use-fake-device-for-media-stream ...]
+//   node tools/chrome_page.mjs --url http://127.0.0.1:PORT/tests/runner/models.html --hf-dir DIR [--hf-alias PATH=FILE ...] [--flag --use-fake-device-for-media-stream ...]
 //
 // Why Playwright and not a command line to chrome.exe: it starts Chrome with its own temporary profile, and ends it cleanly
 // when this script ends, which it does when its standard input is closed (the Python test closes it) or after --timeout seconds.
 //
 // The page can ask for two things through functions this script adds to it:
-//   setHuggingFace(mode)   "files" (default): requests to huggingface.co are answered from --hf-dir, by file name, with the
-//                          headers the real site sends (so the page's own checks run); "offline": they fail as if there
+//   setHuggingFace(mode)   "files" (default): requests to huggingface.co are answered from --hf-dir, by file name (or, for a file whose
+//                          name in the repository says too little, as --hf-alias PATH=FILE names it: the request for .../PATH is
+//                          answered from FILE in --hf-dir), with the headers the real site sends (so the page's own checks run); "offline": they fail as if there
 //                          were no connection; "corrupt": the right size, wrong bytes; "live": they go to the real site
 //   requestsSoFar()        every request the page and its workers made so far, as [{url, status}], in order
 // Nothing else is changed: the page runs as a visitor's would, with the CDN and our own server reached for real.
@@ -23,6 +24,7 @@ const flags = process.argv.flatMap((value, i) => (process.argv[i - 1] === "--fla
 const url = argument("--url");
 const hfDir = argument("--hf-dir");
 const timeoutSeconds = Number(argument("--timeout", "900"));
+const aliases = process.argv.flatMap((value, i) => (process.argv[i - 1] === "--hf-alias" ? [value.split("=")] : []));
 
 const browser = await chromium.launch({
   executablePath: CHROME, headless: true,
@@ -40,7 +42,9 @@ await context.route("https://huggingface.co/**", async (route) => {
   const headers = { "access-control-allow-origin": "*", "content-type": "application/octet-stream" };
   if (mode === "offline") { entry.status = "failed"; return route.abort("internetdisconnected"); }
   if (mode === "live") { const response = await route.fetch(); entry.status = response.status(); return route.fulfill({ response }); }
-  const file = path.join(hfDir, path.basename(new URL(address).pathname));
+  const pathname = new URL(address).pathname;
+  const alias = aliases.find(([from]) => pathname.endsWith("/" + from));
+  const file = path.join(hfDir, alias ? alias[1] : path.basename(pathname));
   if (!existsSync(file)) { entry.status = 404; return route.fulfill({ status: 404, headers, body: "" }); }
   const body = readFileSync(file);
   if (mode === "corrupt") body.fill(7, 100, 200);                      // the right size, not the right bytes
