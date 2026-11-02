@@ -1,4 +1,4 @@
-r"""Test ml.pose() and ml.hand() in the browser runner, in headless Chrome (story S-232).
+r"""Test ml.pose(), ml.hand() and ml.person() in the browser runner, in headless Chrome (stories S-232, S-233).
 
     C:\Projects\playground\.venv\Scripts\python.exe tools/test_models.py --ml-python <python with funground-ml> [--funground C:\Projects\playground] [--live]
 
@@ -13,6 +13,12 @@ back; the sketch prints every point too. The test passes when a body and a hand 
 5 px of the desktop's (S-231 measured 4.65 px for the body and 2.17 px for the hand with another resampling; the crop here is
 the same as Pillow's, so the difference is much smaller).
 
+The person (S-233) is a mask, not points. tests/runner/models_person_sketch.py cuts the person out of standing_woman_640.jpg and prints
+the picture's alpha plane (one byte for each pixel). The two planes must agree: the mean absolute difference at most ALPHA_MEAN_BOUND
+(3 of 255) and at most ALPHA_SHARE_BOUND (1 percent) of the pixels differing by more than ALPHA_SHARE_LEVEL (32). The bounds were set
+before the first measurement. Python's share of the work in a page (the 256 x 256 mask stretched over 640 x 480 and applied, which
+funground does in Cairo, in C) is timed in the browser and must take at most MASK_TIME_BOUND_MS (15 ms).
+
 Cases, run in one Chrome (one temporary profile, so Cache Storage carries over from case to case):
 
   * pose, hand: empty cache. One line "Downloading the {task} model, {n} MB, once. After that the browser keeps a copy.", the
@@ -22,6 +28,8 @@ Cases, run in one Chrome (one temporary profile, so Cache Storage carries over f
     numpy, Pillow or onnxruntime.
   * no connection and no copy: one plain sentence, once, and the sketch goes on.
   * a file with the wrong bytes: one sentence about the checksum, and the file is not kept.
+  * person: the mask of the photograph, compared with the desktop's (one model file, one download line).
+  * mask time: the milliseconds Python needs in the page to turn the mask into the person's picture at 640 x 480.
   * speed: answers a second for each task on this machine, with a new picture every frame.
 
 The model site is answered from ml/tests/.models by tools/chrome_page.mjs (the real files, with the real site's headers); --live
@@ -32,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import importlib.util
 import json
 import math
 import os
@@ -41,6 +50,7 @@ import sys
 import tempfile
 import threading
 import time
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,8 +60,13 @@ NODE = os.environ.get("NODE", r"C:\sw\nodejs\node.exe")
 FAKE = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
 SKETCHES = REPO / "tests" / "runner"
 TOLERANCE_PX = 5.0
-PHOTOS = {"pose": "gandhi_london_rain.jpg", "hand": "standing_woman_640.jpg"}
-SIZE_MB = {"pose": 18, "hand": 8}
+PHOTOS = {"pose": "gandhi_london_rain.jpg", "hand": "standing_woman_640.jpg", "person": "standing_woman_640.jpg"}
+SIZE_MB = {"pose": 18, "hand": 8, "person": 1}
+FILES = {"pose": 2, "hand": 2, "person": 1}          # model files a task downloads
+ALPHA_MEAN_BOUND = 3.0                               # grey levels (of 255): the mean absolute difference of the two alpha planes
+ALPHA_SHARE_LEVEL = 32                               # a pixel counts as different when its alpha differs by more than this ...
+ALPHA_SHARE_BOUND = 0.01                             # ... and at most this share of the pixels may count
+MASK_TIME_BOUND_MS = 15.0                            # Python's share of ml.person in a page, for 640 x 480
 DOWNLOAD_LINE = "Downloading the {task} model, {mb} MB, once. After that the browser keeps a copy."
 ORT_FOLDER = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/"
 
@@ -85,6 +100,50 @@ def desktop_points(ml_python: str, funground: Path, hf_dir: Path, task: str) -> 
     return found
 
 
+def parse_alpha(lines: list[str]) -> dict | None:
+    """The {"width", "height", "plane"} a sketch printed after "alpha ", or None when it printed "alpha none" or nothing."""
+    for line in lines:
+        match = re.search(r"alpha (\{.*\})", line)
+        if match:
+            return json.loads(match.group(1))
+    return None
+
+
+def alpha_plane(found: dict) -> bytes:
+    plane = zlib.decompress(base64.b64decode(found["plane"]))
+    if len(plane) != found["width"] * found["height"]:
+        raise SystemExit(f"an alpha plane of {found['width']} x {found['height']} has {len(plane)} bytes")
+    return plane
+
+
+def desktop_alpha(ml_python: str, funground: Path, hf_dir: Path) -> dict:
+    """Run the person sketch on the desktop (python sketch.py, headless, onnxruntime) and return the alpha it printed."""
+    task = "person"
+    with tempfile.TemporaryDirectory(prefix="models_desktop_") as folder:
+        folder = Path(folder)
+        (folder / "sketch.py").write_text(sketch_text("models_person_sketch.py", task) + "\nf.run()\n", encoding="utf-8")
+        (folder / PHOTOS[task]).write_bytes((funground / "ml" / "tests" / "data" / PHOTOS[task]).read_bytes())
+        env = dict(os.environ, FUNGROUND_HEADLESS="1", FUNGROUND_ML_MODELS=str(hf_dir))
+        done = subprocess.run([ml_python, "sketch.py"], cwd=folder, env=env, capture_output=True, text=True, timeout=600)
+    found = parse_alpha(done.stdout.splitlines())
+    if found is None:
+        raise SystemExit(f"the desktop made no person (exit {done.returncode}): {done.stdout[-500:]} {done.stderr[-800:]}")
+    return found
+
+
+def compare_alpha(desktop: dict, play: dict) -> dict:
+    """How far apart two alpha planes are: the mean absolute difference (0..255), the share of pixels that differ by more than
+    ALPHA_SHARE_LEVEL, the largest difference, and the share of each plane that is mostly the person (alpha over 127)."""
+    if (desktop["width"], desktop["height"]) != (play["width"], play["height"]):
+        return {"problem": f"the planes have different sizes: {desktop['width']} x {desktop['height']} and {play['width']} x {play['height']}"}
+    a, b = alpha_plane(desktop), alpha_plane(play)
+    differences = [abs(x - y) for x, y in zip(a, b)]
+    count = len(differences)
+    return {"mean_abs": round(sum(differences) / count, 4), "share_over_32": round(sum(d > ALPHA_SHARE_LEVEL for d in differences) / count, 5),
+            "max": max(differences), "person_share_desktop": round(sum(v > 127 for v in a) / count, 4),
+            "person_share_play": round(sum(v > 127 for v in b) / count, 4)}
+
+
 def compare(task: str, desktop: dict, play: dict) -> dict:
     """The distance in pixels between each point of the two, by name: the largest, the mean and where the largest is."""
     names = list(desktop["points"])
@@ -110,11 +169,14 @@ def cases(data: Path) -> list[dict]:
         case("pose", "models_sketch.py", "pose", points, clear_cache=True),
         case("hand", "models_sketch.py", "hand", points),
         case("pose from the copy", "models_sketch.py", "pose", points, hf="offline"),
+        case("person", "models_person_sketch.py", "person", "^alpha "),
+        case("mask time", "models_mask_time_sketch.py", "person", "^mask to person", files=False),
         case("camera", "models_camera_sketch.py", "pose", "^loaded", files=False),
         case("no connection and no copy", "models_sketch.py", "pose", "could not download", hf="offline", clear_cache=True),
         case("wrong bytes", "models_sketch.py", "pose", "checksum", hf="corrupt", clear_cache=True),
         case("speed, pose", "models_speed_sketch.py", "pose", "^speed", wait_s=300, clear_cache=True),
         case("speed, hand", "models_speed_sketch.py", "hand", "^speed", wait_s=300),
+        case("speed, person", "models_speed_sketch.py", "person", "^speed", wait_s=300),
     ]
 
 
@@ -146,8 +208,8 @@ def problems_download(result: dict, task: str, desktop: dict) -> tuple[list[str]
     if lines.count(line) != 1:
         out.append(f"expected the line {line!r} exactly once, got {[l for l in lines if 'Downloading' in l]}")
     asked = model_requests(result)
-    if len(asked) != 2 or any(r["status"] != 200 for r in asked):
-        out.append(f"expected two good requests to the model site, got {asked}")
+    if len(asked) != FILES[task] or any(r["status"] != 200 for r in asked):
+        out.append(f"expected {FILES[task]} good requests to the model site, got {asked}")
     found = parse_points(lines)
     if found is None:
         out.append(f"no {task} was found in the browser")
@@ -158,6 +220,45 @@ def problems_download(result: dict, task: str, desktop: dict) -> tuple[list[str]
     elif numbers["max_px"] > TOLERANCE_PX:
         out.append(f"the {task} differs from the desktop's by {numbers['max_px']} px at {numbers['worst']} (the limit is {TOLERANCE_PX})")
     return out, numbers
+
+
+def problems_person(result: dict, desktop: dict) -> tuple[list[str], dict]:
+    out = [f"error: {result['error']}"] if "error" in result else []
+    out += stderr_problems(result)
+    lines = stdout_lines(result)
+    line = DOWNLOAD_LINE.format(task="person", mb=SIZE_MB["person"])
+    if lines.count(line) != 1:
+        out.append(f"expected the line {line!r} exactly once, got {[l for l in lines if 'Downloading' in l]}")
+    asked = model_requests(result)
+    if len(asked) != FILES["person"] or any(r["status"] != 200 for r in asked):
+        out.append(f"expected {FILES['person']} good request to the model site, got {asked}")
+    found = parse_alpha(lines)
+    if found is None:
+        out.append("no person picture was made in the browser")
+        return out, {}
+    numbers = compare_alpha(desktop, found)
+    if "problem" in numbers:
+        out.append(numbers["problem"])
+    else:
+        if numbers["mean_abs"] > ALPHA_MEAN_BOUND:
+            out.append(f"the person's alpha differs from the desktop's by {numbers['mean_abs']} on average (the limit is {ALPHA_MEAN_BOUND})")
+        if numbers["share_over_32"] > ALPHA_SHARE_BOUND:
+            out.append(f"{numbers['share_over_32']:.2%} of the person's pixels differ by more than {ALPHA_SHARE_LEVEL} (the limit is {ALPHA_SHARE_BOUND:.0%})")
+        if numbers["person_share_desktop"] < 0.1:
+            out.append("the desktop's mask has hardly a person in it: the test photograph is wrong or the model failed")
+    return out, numbers
+
+
+def mask_time_of(result: dict) -> tuple[list[str], str]:
+    out = [f"error: {result['error']}"] if "error" in result else []
+    out += stderr_problems(result)
+    for line in stdout_lines(result):
+        match = re.match(r"mask to person ([\d.]+) ms median, ([\d.]+) ms slowest", line)
+        if match:
+            if float(match.group(1)) > MASK_TIME_BOUND_MS:
+                out.append(f"Python needs {match.group(1)} ms to turn the mask into the person's picture (the limit is {MASK_TIME_BOUND_MS})")
+            return out, f"{match.group(1)} ms median, {match.group(2)} ms slowest"
+    return out + [f"no time was printed: {stdout_lines(result)[-3:]}"], "none"
 
 
 def problems_copy(result: dict, desktop: dict) -> tuple[list[str], dict]:
@@ -216,12 +317,24 @@ def speed_of(result: dict) -> tuple[list[str], str]:
 
 # ---- Chrome
 
-def run_page(cases_list: list[dict], hf_dir: Path, live: bool, timeout: int) -> dict:
+def kept_names(funground: Path) -> list[str]:
+    """``--hf-alias`` arguments for models whose copy has another name than the file in the repository (funground-ml's table
+    says so: ``kept_as``), read from ml/funground_ml/_models.py, the one place the table is written down."""
+    spec = importlib.util.spec_from_file_location("_funground_ml_models", funground / "ml" / "funground_ml" / "_models.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module                          # the dataclasses in it look themselves up here
+    spec.loader.exec_module(module)
+    return [f"{model.file}={model.local_name}" for model in module.MODELS.values() if model.local_name != model.file]
+
+
+def run_page(cases_list: list[dict], hf_dir: Path, live: bool, timeout: int, aliases: list[str]) -> dict:
     box: dict = {}
     done = threading.Event()
     server = serve(cases_list, box, done)
     command = [NODE, str(REPO / "tools" / "chrome_page.mjs"), "--url", f"http://127.0.0.1:{server.server_port}/tests/runner/models.html",
                "--hf-dir", str(hf_dir), "--timeout", str(timeout)]
+    for alias in aliases:
+        command += ["--hf-alias", alias]
     for flag in FAKE:
         command += ["--flag", flag]
     node = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -256,14 +369,16 @@ def main() -> int:
 
     desktop = {task: desktop_points(args.ml_python, args.funground, hf_dir, task) for task in ("pose", "hand")}
     print("desktop:", {task: f"score {found['score']}, {len(found['points'])} points" for task, found in desktop.items()}, flush=True)
+    desktop_person = desktop_alpha(args.ml_python, args.funground, hf_dir)
+    print("desktop person:", f"{desktop_person['width']} x {desktop_person['height']}", flush=True)
 
     wanted = [c for c in cases(args.funground / "ml" / "tests" / "data") if not (args.skip_speed and c["id"].startswith("speed"))
               and (args.only is None or args.only in c["id"])]
     if args.live:
         for c in wanted:
-            if c["id"] in ("pose", "hand"):
+            if c["id"] in ("pose", "hand", "person"):
                 c["hf"] = "live"
-    report = run_page(wanted, hf_dir, args.live, args.timeout)
+    report = run_page(wanted, hf_dir, args.live, args.timeout, kept_names(args.funground))
     results = {r["id"]: r for r in report.get("cases", [])}
     failures: list[str] = []
     summary: dict = {}
@@ -282,6 +397,12 @@ def main() -> int:
     if "pose from the copy" in results:
         found, summary["pose from the copy"] = problems_copy(results["pose from the copy"], desktop["pose"])
         check("pose from the copy", found)
+    if "person" in results:
+        found, summary["person"] = problems_person(results["person"], desktop_person)
+        check("person", found)
+    if "mask time" in results:
+        found, summary["mask time"] = mask_time_of(results["mask time"])
+        check("mask time", found)
     if "camera" in results:
         check("camera", problems_camera(results["camera"]))
     if "no connection and no copy" in results:
@@ -292,7 +413,7 @@ def main() -> int:
         sentence = re.compile(r"^ml\.pose\(\): the file downloaded for the pose detector is not the one funground expects \(its checksum is different\)")
         check("wrong bytes", problems_sentence(results["wrong bytes"], sentence, "the checksum"))
     speeds = {}
-    for task in ("pose", "hand"):
+    for task in ("pose", "hand", "person"):
         if f"speed, {task}" in results:
             found, speeds[task] = speed_of(results[f"speed, {task}"])
             check(f"speed, {task}", found)
@@ -304,7 +425,9 @@ def main() -> int:
     summary["speed"] = speeds
     summary["hosts"] = hosts_seen
     summary["failures"] = sorted(set(failures))
-    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop}, indent=1), encoding="utf-8")
+    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop,
+                                                        "desktop_person": {k: v for k, v in desktop_person.items() if k != "plane"}}, indent=1),
+                                            encoding="utf-8")
     print(json.dumps(summary, indent=1))
     print("FAILED" if summary["failures"] else "all passed", f"({len(summary['failures'])} problems)")
     return 1 if summary["failures"] else 0

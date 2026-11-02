@@ -128,7 +128,7 @@ C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`
 
 ## Models (S-232)
 
-`ml.pose(cam)` and `ml.hand(cam)` (the `funground-ml` package) find a body or a hand. The sketch is the same file as on a computer
+`ml.pose(cam)`, `ml.hand(cam)` and `ml.person(cam)` (the `funground-ml` package) find a body, a hand or the outline of a person. The sketch is the same file as on a computer
 and has no `async`. Design: `docs/design/Web_Runner_Note.md` (Models) and `ML_Package_Note.md` in funground.
 
 - **The models worker.** `models-worker.js` is a module worker that `worker.js` starts the first time a sketch asks for a model, so a
@@ -136,13 +136,14 @@ and has no `async`. Design: `docs/design/Web_Runner_Note.md` (Models) and `ML_Pa
   to it (the buffer is transferred) and, between two steps, pushes each answer into funground's `Session` (`push_models`). At most one picture is in flight for each source and task; the others are dropped.
   So `ml.pose(cam)` gives the newest answer the browser has: `None` until the first arrives, and it can be one frame behind.
   `models-glue.js` does the pictures-in, points-out work (the JavaScript twin of funground-ml's `_glue.py`: the same thresholds and the same
-  rule for reusing a found box).
+  rule for reusing a found box). For `ml.person` it also has the model's input (`stretchToTensor`: Pillow's bilinear resize written out) and output: the worker
+  answers with the 256 x 256 mask as bytes (`push_models_mask`), and Python stretches it over the picture in Cairo (3.7 ms at 640 x 480 in Pyodide).
 - **onnxruntime-web.** Loaded in the models worker from `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/` (`ONNXRUNTIME` in
   `worker.js`): `ort.wasm.mjs`, the wasm build only, with `wasmPaths` at the same folder. The version is exact; it was the newest that
   was at least two weeks old when it was pinned (2 November 2026). The runner option `onnxruntimeUrl` replaces the folder (it must end with
   the same files). It has no telemetry to switch off: at that version the loader fetches its own `.wasm` file and nothing else.
 - **The model files.** `tools/build_runtime.py` writes `runtime/models.json` (manifest role `models`) from funground-ml's
-  `_models.py`: the Hugging Face address (pinned to a commit), size and SHA-256 of the four files, and which two make each task. The
+  `_models.py`: the Hugging Face address (pinned to a commit), size and SHA-256 of the five files, and which make each task (two for pose and hand, one for person). The
   worker downloads a file once, checks it with `crypto.subtle.digest`, and keeps it in Cache Storage (`funground-models-v1`). Later runs, offline too,
   read the kept copy, which is checked again when read. The first time, the sketch's output gets one line, the desktop's with the
   folder wording changed: `Downloading the pose model, 18 MB, once. After that the browser keeps a copy.` (`8 MB` for the hand.) With no connection and no copy, or a file that fails its check, the sketch gets one sentence

@@ -1,6 +1,6 @@
-// The pictures-in, points-out part of the pose and hand models, for the page (story S-232).
+// The pictures-in, points-out part of the pose and hand models, and the person's mask, for the page (stories S-232, S-233).
 //
-// This is the JavaScript twin of funground-ml's `_glue.py` (in the funground repository, ml/funground_ml). It runs the same four
+// This is the JavaScript twin of funground-ml's `_glue.py` (in the funground repository, ml/funground_ml). It runs the same five
 // ONNX files and must give the same points, so it follows the Python file step by step and uses the same numbers. If the one
 // changes, the other changes with it. Nothing here touches the page or a worker: it takes onnxruntime-web's `ort` module and two
 // sessions, so it can be read, and tested, on its own.
@@ -14,7 +14,8 @@
 //
 // A picture is `{rgba, width, height}`: opaque RGBA bytes (a Uint8Array or Uint8ClampedArray), row by row from the top left.
 // Points come out in that picture's pixels, as a flat array x0, y0, x1, y1, ... of the model's own points (the Python side
-// swaps left and right for a mirrored camera).
+// swaps left and right for a mirrored camera). The person's mask comes out as bytes, in the mask's own size (256 x 256): the
+// Python side stretches it over the picture.
 
 // ---- the numbers that decide what is "a body" or "a hand", and how long a found box is trusted (the same as _glue.py)
 export const DETECTOR_MIN_SCORE = 0.5;     // the detector's best score, after the sigmoid, must reach this
@@ -259,7 +260,80 @@ export class Tracker {
   }
 }
 
-// ---- the two tasks
+// ---- the person's mask: one model, no boxes
+
+export const MASK_SIZE = 256;              // the selfie model reads a 256 x 256 picture and gives a 256 x 256 mask (_glue.py has the same)
+
+/**
+ * The weights for resizing one line of `inSize` pixels to `outSize`, as Pillow's `Image.resize(..., BILINEAR)` makes them: a
+ * triangle as wide as one output pixel is when enlarging, and as wide as the input pixels one output pixel covers when
+ * shrinking (so a big picture is averaged, not skipped). Returns, for each output pixel, where its input pixels start and
+ * their weights, which add up to 1.
+ */
+function lineWeights(inSize, outSize) {
+  const scale = inSize / outSize, filterScale = Math.max(scale, 1);
+  return Array.from({ length: outSize }, (_, i) => {
+    const centre = (i + 0.5) * scale;
+    const start = Math.max(Math.floor(centre - filterScale + 0.5), 0), end = Math.min(Math.floor(centre + filterScale + 0.5), inSize);
+    const weights = [];
+    let total = 0;
+    for (let x = start; x < end; x++) {
+      const distance = Math.abs((x - centre + 0.5) / filterScale);
+      const weight = distance < 1 ? 1 - distance : 0;
+      weights.push(weight);
+      total += weight;
+    }
+    return { start, weights: weights.map((weight) => weight / total) };
+  });
+}
+
+/**
+ * The whole picture stretched to size x size (not letterboxed: the mask must cover the whole picture) with the same resampling
+ * as Pillow's `resize`, as the model's input: 0 to 1, no mean, channels first, a Float32Array. The line is resized across, then
+ * down, and rounded to a whole number between the two, as Pillow does for 8-bit pictures.
+ */
+export function stretchToTensor(picture, size) {
+  const { rgba, width, height } = picture;
+  const across = lineWeights(width, size), down = lineWeights(height, size);
+  const wide = new Uint8Array(size * height * 3);                  // the rows resized across: size wide, height tall
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < size; x++) {
+      const { start, weights } = across[x];
+      for (let channel = 0; channel < 3; channel++) {
+        let sum = 0;
+        for (let k = 0; k < weights.length; k++) sum += rgba[((y * width) + start + k) * 4 + channel] * weights[k];
+        wide[(y * size + x) * 3 + channel] = Math.min(Math.max(Math.round(sum), 0), 255);
+      }
+    }
+  }
+  const out = new Float32Array(size * size * 3), plane = size * size;
+  for (let y = 0; y < size; y++) {
+    const { start, weights } = down[y];
+    for (let x = 0; x < size; x++) {
+      for (let channel = 0; channel < 3; channel++) {
+        let sum = 0;
+        for (let k = 0; k < weights.length; k++) sum += wide[((start + k) * size + x) * 3 + channel] * weights[k];
+        out[channel * plane + y * size + x] = Math.min(Math.max(Math.round(sum), 0), 255) / 255;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The model's mask for the whole picture: MASK_SIZE x MASK_SIZE bytes, 0 (not the person) to 255 (the person). The model gives a
+ * 0 to 1 value for each pixel; it stays soft, nothing is cut at a threshold. Returns {mask, maskWidth, maskHeight}. (The twin of
+ * `person_mask` in _glue.py.)
+ */
+export async function personMask(ort, session, picture) {
+  const outputs = await run(ort, session, stretchToTensor(picture, MASK_SIZE), [1, 3, MASK_SIZE, MASK_SIZE]);
+  const alphas = outputs[session.outputNames[0]].data;
+  const mask = new Uint8Array(MASK_SIZE * MASK_SIZE);
+  for (let i = 0; i < mask.length; i++) mask[i] = Math.min(Math.max(Math.floor(alphas[i] * 255 + 0.5), 0), 255);
+  return { mask, maskWidth: MASK_SIZE, maskHeight: MASK_SIZE };
+}
+
+// ---- the tasks
 
 const TASKS = {
   pose: { detector: POSE_DETECTOR, region: bodyRegion, landmarks: bodyLandmarks },
@@ -267,10 +341,14 @@ const TASKS = {
 };
 
 /**
- * One source's finder for a task ("pose" or "hand"): it keeps that source's tracker, and shares the sessions.
- * `find(picture)` gives {points, score} (points flat, in the picture's pixels) or null when nobody is there.
+ * One source's finder for a task, made from the task's sessions (the order of `tasks` in models.json): it keeps that
+ * source's state and shares the sessions. `find(picture)` gives
+ *   "pose" and "hand": {points, score} (points flat, in the picture's pixels) or null when nobody is there;
+ *   "person": {mask, maskWidth, maskHeight}, never null (the model always gives a mask).
  */
-export function createFinder(task, ort, detectorSession, landmarkSession) {
+export function createFinder(task, ort, sessions) {
+  if (task === "person") return { find: (picture) => personMask(ort, sessions[0], picture) };
+  const [detectorSession, landmarkSession] = sessions;
   const { detector, region, landmarks } = TASKS[task];
   const tracker = new Tracker();
   return {
