@@ -65,6 +65,8 @@
 // sketch's next ml.pose() call reads it. The answer is therefore the newest result the browser has, and may be one frame behind
 // (contract ML3). The mask comes as bytes of the mask's own size (256 x 256); funground (Cairo, in C) stretches it over the picture.
 // ml.words(mic) (S-234) is the same road for sound: a phrase goes out as float32 bytes (`phrase`), the words come back (`push_models_words`).
+// ml.sound(mic) (S-250) sends a window of sound the same way (about twice a second) and gets the model's 521 scores back as float32 bytes
+// (`push_models_sound`); the names are chosen in Python.
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
@@ -275,6 +277,10 @@ def push_models_words(session, task, key, text, score):
     """Hand the words heard in a phrase from the page to the session."""
     session.push_models_words(task, key, text, score)
 
+def push_models_sound(session, task, key, scores):
+    """Hand the sound model's 521 scores (a Float32Array) from the page to the session, as float32 bytes."""
+    session.push_models_sound(task, key, scores.to_bytes())
+
 def check_real_libraries():
     """Nothing is stubbed: the three C libraries are compiled extension modules (.so), and funground imports them."""
     versions = {}
@@ -370,7 +376,9 @@ function startModelsWorker() {
   modelsWorker.onmessage = (e) => {
     const message = e.data;
     try {
-      if (message.type === "result" && message.task === "words") {
+      if (message.type === "result" && message.task === "sound") {
+        if (session) py.globals.get("push_models_sound")(session, message.task, message.key, message.scores);
+      } else if (message.type === "result" && message.task === "words") {
         if (session) py.globals.get("push_models_words")(session, message.task, message.key, message.text, message.score);
       } else if (message.type === "result" && message.mask) {
         if (session) py.globals.get("push_models_mask")(session, message.task, message.key, message.mask, message.maskWidth, message.maskHeight, message.width, message.height);
@@ -399,7 +407,7 @@ function postModelsRequest(command, fields) {
   if (command === "close") return modelsWorker?.postMessage({ type: "close" });
   if (!modelsWorker) startModelsWorker();
   const request = fields.toJs({ dict_converter: Object.fromEntries });
-  if (request.task === "words") {                                          // a phrase: float32 bytes, not a picture
+  if (request.task === "words" || request.task === "sound") {              // a phrase or a window: float32 bytes, not a picture
     const samples = new Uint8Array(request.samples);                       // a copy that is ours to transfer
     return modelsWorker.postMessage({ type: "phrase", ...request, samples: samples.buffer }, [samples.buffer]);
   }
