@@ -1,4 +1,4 @@
-r"""Test ml.pose(), ml.hand() and ml.person() in the browser runner, in headless Chrome (stories S-232, S-233).
+r"""Test ml.pose(), ml.hand(), ml.person() and ml.words() in the browser runner, in headless Chrome (stories S-232, S-233, S-234).
 
     C:\Projects\playground\.venv\Scripts\python.exe tools/test_models.py --ml-python <python with funground-ml> [--funground C:\Projects\playground] [--live]
 
@@ -19,6 +19,15 @@ the picture's alpha plane (one byte for each pixel). The two planes must agree: 
 before the first measurement. Python's share of the work in a page (the 256 x 256 mask stretched over 640 x 480 and applied, which
 funground does in Cairo, in C) is timed in the browser and must take at most MASK_TIME_BOUND_MS (15 ms).
 
+The words (S-234) are a phrase of sound, not a picture. tests/runner/models_words_sketch.py hears ml/tests/data/tts.wav (one
+recording of a spoken sentence, 7 s) as ml.words(sound.load("tts.wav")) and prints the text and the score; on the desktop that
+runs funground-ml's _whisper.py (numpy and onnxruntime), in the browser the models worker does the same sums in JavaScript. The
+test passes when the two texts are the same, ignoring capitals; the difference of the two scores is reported, not bounded (a
+score is the mean probability of the pieces chosen, and the browser's arithmetic is not bit for bit the desktop's). The sketch then
+asks for the same recording again, and the time of that answer (the model already loaded) is the real-time factor. What this does
+not test: a real microphone (headless Chrome has only its fake one, which plays a beep), the PhraseCutter on a live stream and the
+microphone's own sample rate (the recording is sent whole, at the sound engine's rate).
+
 Cases, run in one Chrome (one temporary profile, so Cache Storage carries over from case to case):
 
   * pose, hand: empty cache. One line "Downloading the {task} model, {n} MB, once. After that the browser keeps a copy.", the
@@ -30,6 +39,8 @@ Cases, run in one Chrome (one temporary profile, so Cache Storage carries over f
   * a file with the wrong bytes: one sentence about the checksum, and the file is not kept.
   * person: the mask of the photograph, compared with the desktop's (one model file, one download line).
   * mask time: the milliseconds Python needs in the page to turn the mask into the person's picture at 640 x 480.
+  * words: the recording's words (three files, one download line), compared with the desktop's; then from the copy (no request to
+    the model site, no line, the same words), and the real-time factor.
   * speed: answers a second for each task on this machine, with a new picture every frame.
 
 The model site is answered from ml/tests/.models by tools/chrome_page.mjs (the real files, with the real site's headers); --live
@@ -60,9 +71,9 @@ NODE = os.environ.get("NODE", r"C:\sw\nodejs\node.exe")
 FAKE = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
 SKETCHES = REPO / "tests" / "runner"
 TOLERANCE_PX = 5.0
-PHOTOS = {"pose": "gandhi_london_rain.jpg", "hand": "standing_woman_640.jpg", "person": "standing_woman_640.jpg"}
-SIZE_MB = {"pose": 18, "hand": 8, "person": 1}
-FILES = {"pose": 2, "hand": 2, "person": 1}          # model files a task downloads
+PHOTOS = {"pose": "gandhi_london_rain.jpg", "hand": "standing_woman_640.jpg", "person": "standing_woman_640.jpg", "words": "tts.wav"}
+SIZE_MB = {"pose": 18, "hand": 8, "person": 1, "words": 42}
+FILES = {"pose": 2, "hand": 2, "person": 1, "words": 3}          # model files a task downloads
 ALPHA_MEAN_BOUND = 3.0                               # grey levels (of 255): the mean absolute difference of the two alpha planes
 ALPHA_SHARE_LEVEL = 32                               # a pixel counts as different when its alpha differs by more than this ...
 ALPHA_SHARE_BOUND = 0.01                             # ... and at most this share of the pixels may count
@@ -74,7 +85,8 @@ ORT_FOLDER = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/"
 # ---- the desktop's numbers
 
 def sketch_text(name: str, task: str) -> str:
-    return f'TASK = "{task}"\nPHOTO = "{PHOTOS[task]}"\n' + (SKETCHES / name).read_text(encoding="utf-8")
+    heading = f'SOUND = "{PHOTOS[task]}"\n' if task == "words" else f'TASK = "{task}"\nPHOTO = "{PHOTOS[task]}"\n'
+    return heading + (SKETCHES / name).read_text(encoding="utf-8")
 
 
 def parse_points(lines: list[str]) -> dict | None:
@@ -98,6 +110,36 @@ def desktop_points(ml_python: str, funground: Path, hf_dir: Path, task: str) -> 
     if found is None:
         raise SystemExit(f"the desktop found no {task} (exit {done.returncode}): {done.stdout[-500:]} {done.stderr[-800:]}")
     return found
+
+
+def parse_json_line(lines: list[str], word: str) -> dict | None:
+    """The object a sketch printed after "word ", or None when it printed "word none" or nothing."""
+    for line in lines:
+        match = re.search(rf"^{word} (\{{.*\}})", line)
+        if match:
+            return json.loads(match.group(1))
+    return None
+
+
+def desktop_words(ml_python: str, funground: Path, hf_dir: Path) -> dict:
+    """Run the words sketch on the desktop (python sketch.py, headless: funground-ml's _whisper.py) and return what it printed."""
+    task = "words"
+    with tempfile.TemporaryDirectory(prefix="models_desktop_") as folder:
+        folder = Path(folder)
+        (folder / "sketch.py").write_text(sketch_text("models_words_sketch.py", task) + "\nf.run()\n", encoding="utf-8")
+        (folder / PHOTOS[task]).write_bytes((funground / "ml" / "tests" / "data" / PHOTOS[task]).read_bytes())
+        env = dict(os.environ, FUNGROUND_HEADLESS="1", FUNGROUND_ML_MODELS=str(hf_dir))
+        done = subprocess.run([ml_python, "sketch.py"], cwd=folder, env=env, capture_output=True, text=True, timeout=600)
+    found = parse_json_line(done.stdout.splitlines(), "words")
+    if found is None:
+        raise SystemExit(f"the desktop heard no words (exit {done.returncode}): {done.stdout[-500:]} {done.stderr[-800:]}")
+    return found
+
+
+def compare_words(desktop: dict, play: dict) -> dict:
+    """The two texts, whether they are the same ignoring capitals, and the scores with their difference."""
+    return {"same": desktop["text"].lower() == play["text"].lower(), "text_desktop": desktop["text"], "text_play": play["text"],
+            "score_desktop": desktop["score"], "score_play": play["score"], "score_difference": round(abs(desktop["score"] - play["score"]), 4)}
 
 
 def parse_alpha(lines: list[str]) -> dict | None:
@@ -172,6 +214,8 @@ def cases(data: Path) -> list[dict]:
         case("person", "models_person_sketch.py", "person", "^alpha "),
         case("mask time", "models_mask_time_sketch.py", "person", "^mask to person", files=False),
         case("camera", "models_camera_sketch.py", "pose", "^loaded", files=False),
+        case("words", "models_words_sketch.py", "words", "^speed ", wait_s=300, clear_cache=True),
+        case("words from the copy", "models_words_sketch.py", "words", "^speed ", wait_s=300, hf="offline"),
         case("no connection and no copy", "models_sketch.py", "pose", "could not download", hf="offline", clear_cache=True),
         case("wrong bytes", "models_sketch.py", "pose", "checksum", hf="corrupt", clear_cache=True),
         case("speed, pose", "models_speed_sketch.py", "pose", "^speed", wait_s=300, clear_cache=True),
@@ -246,6 +290,43 @@ def problems_person(result: dict, desktop: dict) -> tuple[list[str], dict]:
             out.append(f"{numbers['share_over_32']:.2%} of the person's pixels differ by more than {ALPHA_SHARE_LEVEL} (the limit is {ALPHA_SHARE_BOUND:.0%})")
         if numbers["person_share_desktop"] < 0.1:
             out.append("the desktop's mask has hardly a person in it: the test photograph is wrong or the model failed")
+    return out, numbers
+
+
+def problems_words(result: dict, desktop: dict, copy: bool) -> tuple[list[str], dict]:
+    out = [f"error: {result['error']}"] if "error" in result else []
+    out += stderr_problems(result)
+    lines = stdout_lines(result)
+    downloads = [l for l in lines if "Downloading" in l]
+    asked = model_requests(result)
+    if copy:
+        if downloads:
+            out.append("the copy was not used: it downloaded again")
+        if asked:
+            out.append(f"the model site was asked although a copy was kept: {asked}")
+    else:
+        line = DOWNLOAD_LINE.format(task="words", mb=SIZE_MB["words"])
+        if lines.count(line) != 1:
+            out.append(f"expected the line {line!r} exactly once, got {downloads}")
+        if len(asked) != FILES["words"] or any(r["status"] != 200 for r in asked):
+            out.append(f"expected {FILES['words']} good requests to the model site, got {asked}")
+    found = parse_json_line(lines, "words")
+    if found is None:
+        out.append(f"no words were heard in the browser: {lines[-3:]}")
+        return out, {}
+    if found["rate"] == 16000:
+        out.append("the phrase reached the page at 16 kHz, so its resampling, which every microphone needs, was not tested")
+    numbers = compare_words(desktop, found)
+    if not numbers["same"]:
+        out.append(f"the words differ: the desktop heard {desktop['text']!r}, Play heard {found['text']!r}")
+    speed = parse_json_line(lines, "speed")
+    if speed is None:
+        out.append("the second answer never came")
+    else:
+        numbers["answer_seconds"] = speed["seconds"]
+        numbers["recording_seconds"] = speed["recording"]
+        numbers["real_time_factor"] = round(speed["seconds"] / speed["recording"], 3)
+    numbers["first_wait_seconds"] = found["wait"]
     return out, numbers
 
 
@@ -372,11 +453,14 @@ def main() -> int:
     desktop_person = desktop_alpha(args.ml_python, args.funground, hf_dir)
     print("desktop person:", f"{desktop_person['width']} x {desktop_person['height']}", flush=True)
 
+    desktop_heard = desktop_words(args.ml_python, args.funground, hf_dir)
+    print("desktop words:", desktop_heard, flush=True)
+
     wanted = [c for c in cases(args.funground / "ml" / "tests" / "data") if not (args.skip_speed and c["id"].startswith("speed"))
               and (args.only is None or args.only in c["id"])]
     if args.live:
         for c in wanted:
-            if c["id"] in ("pose", "hand", "person"):
+            if c["id"] in ("pose", "hand", "person", "words"):
                 c["hf"] = "live"
     report = run_page(wanted, hf_dir, args.live, args.timeout, kept_names(args.funground))
     results = {r["id"]: r for r in report.get("cases", [])}
@@ -400,6 +484,10 @@ def main() -> int:
     if "person" in results:
         found, summary["person"] = problems_person(results["person"], desktop_person)
         check("person", found)
+    for case_id, copy in (("words", False), ("words from the copy", True)):
+        if case_id in results:
+            found, summary[case_id] = problems_words(results[case_id], desktop_heard, copy)
+            check(case_id, found)
     if "mask time" in results:
         found, summary["mask time"] = mask_time_of(results["mask time"])
         check("mask time", found)
@@ -425,7 +513,7 @@ def main() -> int:
     summary["speed"] = speeds
     summary["hosts"] = hosts_seen
     summary["failures"] = sorted(set(failures))
-    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop,
+    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop, "desktop_words": desktop_heard,
                                                         "desktop_person": {k: v for k, v in desktop_person.items() if k != "plane"}}, indent=1),
                                             encoding="utf-8")
     print(json.dumps(summary, indent=1))

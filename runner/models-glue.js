@@ -361,3 +361,189 @@ export function createFinder(task, ort, sessions) {
       (found) => landmarks(ort, landmarkSession, picture, found)),
   };
 }
+
+// ---- the words: Whisper tiny.en (story S-234)
+//
+// The JavaScript twin of funground-ml's `_whisper.py` and the sums in `_speech.py`, for the "words" task. The same steps, the
+// same numbers: resample the sound to 16 kHz, make the log-mel picture of 30 s padded with silence, run the encoder, then the
+// decoder one piece at a time (the likeliest each time, at most MAX_TOKENS), and turn the pieces into text. If the one changes,
+// the other changes with it. The Python side drops an answer with a low score or no text, so nothing is filtered here.
+
+const WORDS_RATE = 16000;                  // the model hears 16 kHz ...
+const WINDOW_SAMPLES = 30 * WORDS_RATE;    // ... and 30 s at a time
+const FFT_SIZE = 400, HOP = 160, MEL_BANDS = 80, FREQUENCIES = FFT_SIZE / 2 + 1;
+const FRAMES = WINDOW_SAMPLES / HOP;       // 3000 columns of the picture
+const LOG_RANGE = 8, LOG_SHIFT = 4, LOG_SCALE = 4, FLOOR = 1e-10;
+const HEADS = 6, HEAD_SIZE = 64;           // the decoder's past keys and values are (1, 6, length, 64)
+export const END_OF_TEXT = 50256;
+const START_OF_TEXT = 50257, NO_TIMESTAMPS = 50362;
+export const MAX_TOKENS = 224;
+const FIRST_WORD_BANNED = [220, 50256];
+const SUPPRESSED = [
+  1, 2, 7, 8, 9, 10, 14, 25, 26, 27, 28, 29, 31, 58, 59, 60, 61, 62, 63, 90, 91, 92, 93, 357, 366, 438, 532,
+  685, 705, 796, 930, 1058, 1220, 1267, 1279, 1303, 1343, 1377, 1391, 1635, 1782, 1875, 2162, 2361, 2488,
+  3467, 4008, 4211, 4600, 4808, 5299, 5855, 6329, 7203, 9609, 9959, 10563, 10786, 11420, 11709, 11907, 13163,
+  13697, 13700, 14808, 15306, 16410, 16791, 17992, 19203, 19510, 20724, 22305, 22935, 27007, 30109, 30420,
+  33409, 34949, 40283, 40493, 40549, 47282, 49146, 50257, 50357, 50358, 50359, 50360, 50361];
+
+/**
+ * The samples as float32 at 16 kHz, by linear interpolation, with the exact formula of `to_model_rate` in _whisper.py:
+ * count = floor(n * 16000 / rate); output j is at p = j * rate / 16000, i = floor(p), t = p - i, and
+ * y[j] = x[i] * (1 - t) + x[min(i + 1, n - 1)] * t. (Math.fround is used where Python's float32 rounds.)
+ */
+export function toModelRate(samples, rate) {
+  if (rate === WORDS_RATE || samples.length === 0) return samples;
+  const count = Math.floor(samples.length * WORDS_RATE / rate), last = samples.length - 1;
+  const out = new Float32Array(count);
+  for (let j = 0; j < count; j++) {
+    const p = j * rate / WORDS_RATE, i = Math.floor(p), t = Math.fround(p - i);
+    out[j] = Math.fround(Math.fround(samples[i] * Math.fround(1 - t)) + Math.fround(samples[Math.min(i + 1, last)] * t));
+  }
+  return out;
+}
+
+// The Slaney mel filter bank (80 x 201), the Hann window and the Fourier tables, made once.
+let tables = null;
+function melTables() {
+  if (tables) return tables;
+  const hertzToMel = (hz) => (hz < 1000 ? hz / (200 / 3) : 15 + Math.log(Math.max(hz, 1e-9) / 1000) / (Math.log(6.4) / 27));
+  const melToHertz = (mel) => (mel < 15 ? mel * (200 / 3) : 1000 * Math.exp((Math.log(6.4) / 27) * (mel - 15)));
+  const top = hertzToMel(WORDS_RATE / 2), edges = [];
+  for (let i = 0; i < MEL_BANDS + 2; i++) edges.push(melToHertz(top * i / (MEL_BANDS + 1)));
+  const filters = new Float64Array(MEL_BANDS * FREQUENCIES);
+  for (let m = 0; m < MEL_BANDS; m++) {
+    for (let k = 0; k < FREQUENCIES; k++) {
+      const hz = k * WORDS_RATE / FFT_SIZE;
+      const rising = (hz - edges[m]) / (edges[m + 1] - edges[m]), falling = (edges[m + 2] - hz) / (edges[m + 2] - edges[m + 1]);
+      filters[m * FREQUENCIES + k] = Math.max(0, Math.min(rising, falling)) * (2 / (edges[m + 2] - edges[m]));
+    }
+  }
+  const window = new Float64Array(FFT_SIZE), cos = new Float64Array(FREQUENCIES * FFT_SIZE), sin = new Float64Array(FREQUENCIES * FFT_SIZE);
+  for (let n = 0; n < FFT_SIZE; n++) window[n] = 0.5 - 0.5 * Math.cos(2 * Math.PI * n / FFT_SIZE);
+  for (let k = 0; k < FREQUENCIES; k++) {
+    for (let n = 0; n < FFT_SIZE; n++) {
+      const angle = 2 * Math.PI * ((k * n) % FFT_SIZE) / FFT_SIZE;
+      cos[k * FFT_SIZE + n] = Math.cos(angle);
+      sin[k * FFT_SIZE + n] = Math.sin(angle);
+    }
+  }
+  tables = { filters, window, cos, sin };
+  return tables;
+}
+
+/**
+ * The encoder's input for 16 kHz `audio`: a Float32Array of 80 x 3000 (row = mel band), as `log_mel` in _whisper.py. Sound past
+ * 30 s is cut; less is padded with silence. The Fourier sums are done directly (400 x 201 products for a column): the columns
+ * that see only the silence after the sound all have the same value, so they are worked out once.
+ */
+export function logMel(audio) {
+  const { filters, window, cos, sin } = melTables();
+  const half = FFT_SIZE / 2;
+  const body = new Float32Array(WINDOW_SAMPLES);
+  body.set(audio.subarray(0, Math.min(audio.length, WINDOW_SAMPLES)));
+  const padded = new Float32Array(WINDOW_SAMPLES + FFT_SIZE);        // reflected at both ends, as numpy's pad(mode="reflect")
+  padded.set(body, half);
+  for (let i = 1; i <= half; i++) {
+    padded[half - i] = body[i];
+    padded[half + WINDOW_SAMPLES - 1 + i] = body[WINDOW_SAMPLES - 1 - i];
+  }
+  // Column t reads padded[t * HOP, t * HOP + 400). From this column on, that is all zeros (the sound ends before it).
+  const firstSilent = Math.ceil((Math.min(audio.length, WINDOW_SAMPLES) + half) / HOP) + 1;
+  const mel = new Float32Array(MEL_BANDS * FRAMES), power = new Float64Array(FREQUENCIES), segment = new Float64Array(FFT_SIZE);
+  let silent = null;
+  for (let t = 0; t < FRAMES; t++) {
+    let column;
+    if (t > firstSilent && silent) {
+      column = silent;
+    } else {
+      for (let n = 0; n < FFT_SIZE; n++) segment[n] = padded[t * HOP + n] * window[n];
+      for (let k = 0; k < FREQUENCIES; k++) {
+        let re = 0, im = 0;
+        const at = k * FFT_SIZE;
+        for (let n = 0; n < FFT_SIZE; n++) { re += segment[n] * cos[at + n]; im -= segment[n] * sin[at + n]; }
+        power[k] = re * re + im * im;
+      }
+      column = new Float64Array(MEL_BANDS);
+      for (let m = 0; m < MEL_BANDS; m++) {
+        let sum = 0;
+        for (let k = 0; k < FREQUENCIES; k++) sum += filters[m * FREQUENCIES + k] * power[k];
+        column[m] = sum;
+      }
+      if (t === firstSilent) silent = column;
+    }
+    for (let m = 0; m < MEL_BANDS; m++) mel[m * FRAMES + t] = column[m];
+  }
+  let loudest = -Infinity;
+  for (let i = 0; i < mel.length; i++) {
+    mel[i] = Math.log10(Math.max(mel[i], FLOOR));
+    if (mel[i] > loudest) loudest = mel[i];
+  }
+  for (let i = 0; i < mel.length; i++) mel[i] = (Math.max(mel[i], loudest - LOG_RANGE) + LOG_SHIFT) / LOG_SCALE;
+  return mel;
+}
+
+/** GPT-2's table: the character that stands for each byte value, turned round (character -> byte). Same as `_speech.py`. */
+function byteOfCharacter() {
+  const printable = new Set();
+  for (let b = 33; b <= 126; b++) printable.add(b);
+  for (let b = 161; b <= 172; b++) printable.add(b);
+  for (let b = 174; b <= 255; b++) printable.add(b);
+  const table = new Map();
+  let spare = 0;
+  for (let b = 0; b < 256; b++) table.set(String.fromCharCode(printable.has(b) ? b : 256 + spare++), b);
+  return table;
+}
+
+/** The text for the numbers the model chose: control numbers skipped, pieces joined, characters turned to bytes, read as UTF-8. */
+export function decodeWords(numbers, vocabulary) {
+  const bytes = byteOfCharacter();
+  const joined = numbers.filter((n) => n < END_OF_TEXT).map((n) => vocabulary[n]).join("");
+  return new TextDecoder().decode(Uint8Array.from(joined, (character) => bytes.get(character) ?? 0x3F)).trim();
+}
+
+/**
+ * Whisper from its sessions (the order of "words" in models.json: encoder, decoder) and `vocab.json` (a parsed object, piece ->
+ * number). `transcribe(samples, rate)` gives {text, score}: the words heard ("" for none) and the mean probability of the
+ * pieces the model chose (0 for none). The twin of `Whisper.transcribe` in _whisper.py.
+ */
+export function createWords(ort, [encoder, decoder], vocabularyFile) {
+  const vocabulary = [];
+  for (const [piece, number] of Object.entries(vocabularyFile)) vocabulary[number] = piece;
+  const suppressed = new Set(SUPPRESSED);
+  const pastNames = decoder.inputNames.filter((name) => name.startsWith("past_key_values"));
+  const presentNames = decoder.outputNames.slice(1);
+  return {
+    async transcribe(samples, rate) {
+      const features = new ort.Tensor("float32", logMel(toModelRate(samples, rate)), [1, MEL_BANDS, FRAMES]);
+      const hidden = (await encoder.run({ [encoder.inputNames[0]]: features }))[encoder.outputNames[0]];
+      const past = Object.fromEntries(pastNames.map((name) => [name, new ort.Tensor("float32", new Float32Array(0), [1, HEADS, 0, HEAD_SIZE])]));
+      const chosen = [], probabilities = [];
+      let feed = [START_OF_TEXT, NO_TIMESTAMPS], first = true;
+      while (chosen.length < MAX_TOKENS) {
+        const outputs = await decoder.run({
+          input_ids: new ort.Tensor("int64", BigInt64Array.from(feed, BigInt), [1, feed.length]),
+          encoder_hidden_states: hidden,
+          use_cache_branch: new ort.Tensor("bool", [!first], [1]),
+          ...past,
+        });
+        const logits = outputs.logits, size = logits.dims[2], offset = (logits.dims[1] - 1) * size;
+        const allowed = (v) => !suppressed.has(v) && !(chosen.length === 0 && FIRST_WORD_BANNED.includes(v));
+        let best = -1;
+        for (let v = 0; v < size; v++) if (allowed(v) && (best < 0 || logits.data[offset + v] > logits.data[offset + best])) best = v;
+        if (best === END_OF_TEXT) break;
+        chosen.push(best);
+        let total = 0;
+        for (let v = 0; v < size; v++) if (allowed(v)) total += Math.exp(logits.data[offset + v] - logits.data[offset + best]);
+        probabilities.push(1 / total);
+        for (const name of presentNames) {
+          const key = name.replace("present", "past_key_values");
+          if (first || key.includes(".decoder.")) past[key] = outputs[name];       // the encoder's keys and values are worked out once
+        }
+        feed = [best];
+        first = false;
+      }
+      if (chosen.length === 0) return { text: "", score: 0 };
+      return { text: decodeWords(chosen, vocabulary), score: probabilities.reduce((a, b) => a + b, 0) / probabilities.length };
+    },
+  };
+}
