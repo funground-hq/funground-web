@@ -366,7 +366,7 @@ export function createFinder(task, ort, sessions) {
 //
 // The JavaScript twin of funground-ml's `_whisper.py` and the sums in `_speech.py`, for the "words" task. The same steps, the
 // same numbers: resample the sound to 16 kHz, make the log-mel picture of 30 s padded with silence, run the encoder, then the
-// decoder one piece at a time (the likeliest each time, at most MAX_TOKENS), and turn the pieces into text. If the one changes,
+// decoder one piece at a time (the likeliest each time, until `tokenLimit` or a loop, `loopTail`), and turn the pieces into text. If the one changes,
 // the other changes with it. The Python side drops an answer with a low score or no text, so nothing is filtered here.
 
 const WORDS_RATE = 16000;                  // the model hears 16 kHz ...
@@ -378,6 +378,7 @@ const HEADS = 6, HEAD_SIZE = 64;           // the decoder's past keys and values
 export const END_OF_TEXT = 50256;
 const START_OF_TEXT = 50257, NO_TIMESTAMPS = 50362;
 export const MAX_TOKENS = 224;
+const TOKENS_PER_SECOND = 10, MIN_TOKENS = 16, LOOP_REPEATS = 4;   // the numbers of `_speech.py` (S-257, D-131)
 const FIRST_WORD_BANNED = [220, 50256];
 const SUPPRESSED = [
   1, 2, 7, 8, 9, 10, 14, 25, 26, 27, 28, 29, 31, 58, 59, 60, 61, 62, 63, 90, 91, 92, 93, 357, 366, 438, 532,
@@ -501,6 +502,22 @@ export function decodeWords(numbers, vocabulary) {
   return new TextDecoder().decode(Uint8Array.from(joined, (character) => bytes.get(character) ?? 0x3F)).trim();
 }
 
+/** The most pieces of words that `seconds` of sound can give. The twin of `token_limit` in _speech.py. */
+export function tokenLimit(seconds) {
+  return Math.max(MIN_TOKENS, Math.min(MAX_TOKENS, Math.trunc(seconds * TOKENS_PER_SECOND)));
+}
+
+/** How many pieces at the end of `chosen` are a loop to drop, or 0. The twin of `loop_tail` in _speech.py. */
+export function loopTail(chosen) {
+  for (const size of [1, 2]) {
+    const length = size * LOOP_REPEATS;
+    if (chosen.length < length) continue;
+    const tail = chosen.slice(-length);
+    if (tail.every((piece, i) => piece === tail[i % size])) return size * (LOOP_REPEATS - 1);
+  }
+  return 0;
+}
+
 /**
  * Whisper from its sessions (the order of "words" in models.json: encoder, decoder) and `vocab.json` (a parsed object, piece ->
  * number). `transcribe(samples, rate)` gives {text, score}: the words heard ("" for none) and the mean probability of the
@@ -519,7 +536,8 @@ export function createWords(ort, [encoder, decoder], vocabularyFile) {
       const past = Object.fromEntries(pastNames.map((name) => [name, new ort.Tensor("float32", new Float32Array(0), [1, HEADS, 0, HEAD_SIZE])]));
       const chosen = [], probabilities = [];
       let feed = [START_OF_TEXT, NO_TIMESTAMPS], first = true;
-      while (chosen.length < MAX_TOKENS) {
+      const limit = tokenLimit(samples.length / rate);
+      while (chosen.length < limit) {
         const outputs = await decoder.run({
           input_ids: new ort.Tensor("int64", BigInt64Array.from(feed, BigInt), [1, feed.length]),
           encoder_hidden_states: hidden,
@@ -535,6 +553,12 @@ export function createWords(ort, [encoder, decoder], vocabularyFile) {
         let total = 0;
         for (let v = 0; v < size; v++) if (allowed(v)) total += Math.exp(logits.data[offset + v] - logits.data[offset + best]);
         probabilities.push(1 / total);
+        const extra = loopTail(chosen);
+        if (extra) {
+          chosen.length -= extra;
+          probabilities.length -= extra;
+          break;
+        }
         for (const name of presentNames) {
           const key = name.replace("present", "past_key_values");
           if (first || key.includes(".decoder.")) past[key] = outputs[name];       // the encoder's keys and values are worked out once
