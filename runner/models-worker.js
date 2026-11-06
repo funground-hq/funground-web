@@ -1,6 +1,6 @@
 // The models worker (stories S-232, S-233, S-234, docs/design/Web_Runner_Note.md in funground): finds a body, a hand or the outline of a
-// person in a picture, and the words in a phrase of sound, with onnxruntime-web, so that ml.pose(cam), ml.hand(cam), ml.person(cam)
-// and ml.words(mic) work in a page.
+// person in a picture, the words in a phrase of sound and the name of a sound, with onnxruntime-web, so that ml.pose(cam), ml.hand(cam), ml.person(cam),
+// ml.words(mic) and ml.sound(mic) work in a page.
 //
 // worker.js (the one that runs Python) starts this worker the first time a sketch asks for a model. Inference takes tens of
 // milliseconds and runs here, beside the sketch, so it never holds up the sketch's step. Messages are like worker.js's.
@@ -9,8 +9,9 @@
 //     init   {onnxruntimeUrl, tableUrl, glueUrl}   where onnxruntime-web is (a folder), the table of model files (models.json) and models-glue.js
 //     frame  {task, key, pixels, width, height}    find the "pose", "hand" or "person" in these RGBA bytes (an ArrayBuffer, transferred);
 //                                                  `key` is the source they came from
-//     phrase {task, key, rate, samples}            hear the "words" in this phrase: `samples` is an ArrayBuffer of float32 (mono, -1 to 1,
-//                                                  transferred), `rate` how many a second; `key` is the source they came from
+//     phrase {task, key, rate, samples}            hear the "words" in this phrase, or name the "sound" in this window: `samples` is an
+//                                                  ArrayBuffer of float32 (mono, -1 to 1, transferred), `rate` how many a second; `key` is
+//                                                  the source they came from
 //     close  {}                                    the run ended: forget every source (the loaded models stay)
 //
 //   here -> worker.js
@@ -19,6 +20,8 @@
 //     result      {task, key, mask, maskWidth, maskHeight, width, height}   "person": `mask` is a Uint8Array of the mask's own
 //                                                  size (256 x 256, its buffer is transferred): 0 is not the person, 255 is
 //     result      {task: "words", key, text, score}   the words heard ("" for none) and the mean probability of the pieces chosen
+//     result      {task: "sound", key, scores}      the 521 scores of the sound model, a Float32Array (its buffer is transferred): the mean
+//                                                  over the windows of the sound. The names are chosen in Python, not here
 //     say         {text}                           one line for the learner's output (the first download)
 //     unavailable {task, reason}                   the task cannot run (no connection for the download, a file that fails
 //                                                  its check, ...): one plain sentence
@@ -47,6 +50,7 @@ function init(message) {
 function close() {
   finders.clear();
   whisper = null;
+  yamnet = null;
 }
 
 // ---- loading
@@ -159,11 +163,18 @@ async function find({ task, key, pixels, width, height }) {
 // ---- hearing
 
 let whisper = null;                   // Whisper, made once; it keeps nothing between phrases
+let yamnet = null;                    // YAMNet, made once; the same
 
 async function hear({ task, key, rate, samples }) {
   try {
     const { ort, glue } = await library();
     const files = await sessionsFor(task);
+    if (task === "sound") {
+      yamnet ??= glue.createSound(ort, files);
+      const scores = await yamnet.classify(new Float32Array(samples), rate);
+      post({ type: "result", task, key, scores }, [scores.buffer]);
+      return;
+    }
     whisper ??= glue.createWords(ort, files.slice(0, 2), files[2]);
     const { text, score } = await whisper.transcribe(new Float32Array(samples), rate);
     post({ type: "result", task, key, text, score });

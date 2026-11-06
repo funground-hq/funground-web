@@ -547,3 +547,28 @@ export function createWords(ort, [encoder, decoder], vocabularyFile) {
     },
   };
 }
+
+// ---- the sound: YAMNet (story S-250)
+//
+// The JavaScript twin of funground-ml's `_yamnet.py`, for the "sound" task. YAMNet takes the raw waveform (float32, 16 kHz, nothing
+// else done to it) and gives a table of one row of 521 scores for every 0.96 s of sound. The answer is the mean of the rows, column
+// by column (a microphone's 0.96 s is one row). The names are not here: funground-ml chooses them from the 521 scores, the same
+// code on the desktop and in a page. The quiet-window rule is applied in Python before a window is sent.
+
+/**
+ * YAMNet from its session (the one file of "sound" in models.json). `classify(samples, rate)` gives a Float32Array of 521 scores:
+ * the samples are resampled with `toModelRate` (the same formula as the desktop's), run, and the rows averaged (in double
+ * precision, as the desktop does, then rounded to float32 to travel).
+ */
+export function createSound(ort, [session]) {
+  return {
+    async classify(samples, rate) {
+      const waveform = toModelRate(samples, rate);
+      const outputs = await session.run({ [session.inputNames[0]]: new ort.Tensor("float32", waveform, [waveform.length]) });
+      const table = outputs[session.outputNames[0]], rows = table.dims[0], size = table.dims[1];
+      const mean = new Float64Array(size);
+      for (let r = 0; r < rows; r++) for (let c = 0; c < size; c++) mean[c] += table.data[r * size + c];
+      return Float32Array.from(mean, (total) => total / rows);
+    },
+  };
+}

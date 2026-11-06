@@ -1,4 +1,4 @@
-r"""Test ml.pose(), ml.hand(), ml.person() and ml.words() in the browser runner, in headless Chrome (stories S-232, S-233, S-234).
+r"""Test ml.pose(), ml.hand(), ml.person(), ml.words() and ml.sound() in the browser runner, in headless Chrome (stories S-232, S-233, S-234, S-250).
 
     C:\Projects\playground\.venv\Scripts\python.exe tools/test_models.py --ml-python <python with funground-ml> [--funground C:\Projects\playground] [--live]
 
@@ -28,6 +28,21 @@ asks for the same recording again, and the time of that answer (the model alread
 not test: a real microphone (headless Chrome has only its fake one, which plays a beep), the PhraseCutter on a live stream and the
 microphone's own sample rate (the recording is sent whole, at the sound engine's rate).
 
+The sound names (S-250) are a window of sound, not a picture. tests/runner/models_sound_sketch.py names three recordings
+(ml/tests/data: tts.wav, whistle.wav and clapping.wav) as ml.sound(sound), each made from the file by the sketch itself and prints for each the name, the score and the
+names of the next guesses; on the desktop that runs funground-ml's _yamnet.py (numpy and onnxruntime), in the browser the models worker
+does the same sums in JavaScript and sends the 521 scores back; the choosing of names is the same Python in both. The test passes when
+the name and the names of the next guesses are the same for every recording; the largest difference of a score is reported, not
+bounded (the browser's arithmetic is not bit for bit the desktop's). It also fails if the page got a recording at 16 kHz (the
+resampling, which every microphone needs, would not have been tested). The sketch asks for the first recording again; the time of that
+answer (the model already loaded) is the real-time factor. One more case, "sound microphone", runs ml.sound(mic) on Chrome's fake
+microphone (a beep every second) and needs answers to come; its names are reported, not compared (the fake sound is not a recording we
+can play the desktop). What this does not test: a real microphone.
+The sketch makes each Sound itself (reads the .wav, resamples to 44.1 kHz in plain Python, sound.create) and does not use sound.load():
+found while writing this test, sound.load() gives the model another waveform on a computer than in a page for the same file (clapping.wav:
+the sum of absolute values 25447 on the desktop, 22125 in the page, and 22125 by exact linear interpolation), which is a difference in
+the core's decoder, not in the model.
+
 Cases, run in one Chrome (one temporary profile, so Cache Storage carries over from case to case):
 
   * pose, hand: empty cache. One line "Downloading the {task} model, {n} MB, once. After that the browser keeps a copy.", the
@@ -41,6 +56,8 @@ Cases, run in one Chrome (one temporary profile, so Cache Storage carries over f
   * mask time: the milliseconds Python needs in the page to turn the mask into the person's picture at 640 x 480.
   * words: the recording's words (three files, one download line), compared with the desktop's; then from the copy (no request to
     the model site, no line, the same words), and the real-time factor.
+  * sound: the three recordings' names (one file, one download line), compared with the desktop's; then from the copy (no request to the
+    model site, no line, the same names), and the real-time factor; then the fake microphone.
   * speed: answers a second for each task on this machine, with a new picture every frame.
 
 The model site is answered from ml/tests/.models by tools/chrome_page.mjs (the real files, with the real site's headers); --live
@@ -72,13 +89,14 @@ FAKE = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
 SKETCHES = REPO / "tests" / "runner"
 TOLERANCE_PX = 5.0
 PHOTOS = {"pose": "gandhi_london_rain.jpg", "hand": "standing_woman_640.jpg", "person": "standing_woman_640.jpg", "words": "tts.wav"}
-SIZE_MB = {"pose": 18, "hand": 8, "person": 1, "words": 42}
-FILES = {"pose": 2, "hand": 2, "person": 1, "words": 3}          # model files a task downloads
+SIZE_MB = {"pose": 18, "hand": 8, "person": 1, "words": 42, "sound": 16}
+FILES = {"pose": 2, "hand": 2, "person": 1, "words": 3, "sound": 1}          # model files a task downloads
 ALPHA_MEAN_BOUND = 3.0                               # grey levels (of 255): the mean absolute difference of the two alpha planes
 ALPHA_SHARE_LEVEL = 32                               # a pixel counts as different when its alpha differs by more than this ...
 ALPHA_SHARE_BOUND = 0.01                             # ... and at most this share of the pixels may count
 MASK_TIME_BOUND_MS = 15.0                            # Python's share of ml.person in a page, for 640 x 480
 DOWNLOAD_LINE = "Downloading the {task} model, {mb} MB, once. After that the browser keeps a copy."
+SOUND_CLIPS = ("tts.wav", "whistle.wav", "clapping.wav")      # in ml/tests/data
 ORT_FOLDER = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/"
 
 
@@ -173,6 +191,56 @@ def desktop_alpha(ml_python: str, funground: Path, hf_dir: Path) -> dict:
     return found
 
 
+def sound_text(name: str) -> str:
+    return f"SOUNDS = {list(SOUND_CLIPS)!r}\n" + (SKETCHES / name).read_text(encoding="utf-8")
+
+
+def parse_sounds(lines: list[str]) -> list[dict]:
+    """The objects a sketch printed after "sound ", one for each recording that was named."""
+    found = []
+    for line in lines:
+        match = re.match(r"^sound (\{.*\})", line)
+        if match:
+            found.append(json.loads(match.group(1)))
+    return found
+
+
+def desktop_sound(ml_python: str, funground: Path, hf_dir: Path) -> list[dict]:
+    """Run the sound sketch on the desktop (python sketch.py, headless: funground-ml's _yamnet.py) and return what it printed."""
+    with tempfile.TemporaryDirectory(prefix="models_desktop_") as folder:
+        folder = Path(folder)
+        (folder / "sketch.py").write_text(sound_text("models_sound_sketch.py") + "\nf.run()\n", encoding="utf-8")
+        for clip in SOUND_CLIPS:
+            (folder / clip).write_bytes((funground / "ml" / "tests" / "data" / clip).read_bytes())
+        env = dict(os.environ, FUNGROUND_HEADLESS="1", FUNGROUND_ML_MODELS=str(hf_dir))
+        done = subprocess.run([ml_python, "sketch.py"], cwd=folder, env=env, capture_output=True, text=True, timeout=600)
+    found = parse_sounds(done.stdout.splitlines())
+    if len(found) != len(SOUND_CLIPS):
+        raise SystemExit(f"the desktop named {len(found)} of {len(SOUND_CLIPS)} sounds (exit {done.returncode}): {done.stdout[-500:]} {done.stderr[-800:]}")
+    return found
+
+
+def compare_sound(desktop: list[dict], play: list[dict]) -> dict:
+    """For each recording: the names on both sides, whether the name and the next names are the same, and the score difference."""
+    rows, worst = [], 0.0
+    by_clip = {row["clip"]: row for row in play}
+    for row in desktop:
+        other = by_clip.get(row["clip"])
+        if other is None:
+            rows.append({"clip": row["clip"], "same": False, "names_desktop": [row["name"]] + [g["name"] for g in row["next"]], "names_play": None})
+            continue
+        names_desktop = [row["name"]] + [g["name"] for g in row["next"]]
+        names_play = [other["name"]] + [g["name"] for g in other["next"]]
+        scores_desktop = [row["score"]] + [g["score"] for g in row["next"]]
+        scores_play = [other["score"]] + [g["score"] for g in other["next"]]
+        difference = max(abs(a - b) for a, b in zip(scores_desktop, scores_play))
+        worst = max(worst, difference)
+        rows.append({"clip": row["clip"], "same": names_desktop == names_play, "names_desktop": names_desktop, "names_play": names_play,
+                     "score_desktop": row["score"], "score_play": other["score"], "max_score_difference": round(difference, 4),
+                     "rate": other["rate"]})
+    return {"clips": rows, "max_score_difference": round(worst, 4)}
+
+
 def compare_alpha(desktop: dict, play: dict) -> dict:
     """How far apart two alpha planes are: the mean absolute difference (0..255), the share of pixels that differ by more than
     ALPHA_SHARE_LEVEL, the largest difference, and the share of each plane that is mostly the person (alpha over 127)."""
@@ -206,6 +274,10 @@ def cases(data: Path) -> list[dict]:
         photo = {PHOTOS[task]: base64.b64encode((data / PHOTOS[task]).read_bytes()).decode()} if files else {}
         return {"id": case_id, "source": sketch_text(sketch, task), "files": photo, "until_output": until, "wait_s": wait_s, **extra}
 
+    def sound_case(case_id: str, data: Path, **extra) -> dict:
+        files = {clip: base64.b64encode((data / clip).read_bytes()).decode() for clip in SOUND_CLIPS}
+        return {"id": case_id, "source": sound_text("models_sound_sketch.py"), "files": files, "until_output": "^speed ", "wait_s": 300, **extra}
+
     points = "^points "
     return [
         case("pose", "models_sketch.py", "pose", points, clear_cache=True),
@@ -216,6 +288,10 @@ def cases(data: Path) -> list[dict]:
         case("camera", "models_camera_sketch.py", "pose", "^loaded", files=False),
         case("words", "models_words_sketch.py", "words", "^speed ", wait_s=300, clear_cache=True),
         case("words from the copy", "models_words_sketch.py", "words", "^speed ", wait_s=300, hf="offline"),
+        sound_case("sound", data, clear_cache=True),
+        sound_case("sound from the copy", data, hf="offline"),
+        {"id": "sound microphone", "source": (SKETCHES / "models_microphone_sketch.py").read_text(encoding="utf-8"), "files": {},
+         "until_output": "^microphone ", "wait_s": 120, "hf": "offline"},
         case("no connection and no copy", "models_sketch.py", "pose", "could not download", hf="offline", clear_cache=True),
         case("wrong bytes", "models_sketch.py", "pose", "checksum", hf="corrupt", clear_cache=True),
         case("speed, pose", "models_speed_sketch.py", "pose", "^speed", wait_s=300, clear_cache=True),
@@ -328,6 +404,56 @@ def problems_words(result: dict, desktop: dict, copy: bool) -> tuple[list[str], 
         numbers["real_time_factor"] = round(speed["seconds"] / speed["recording"], 3)
     numbers["first_wait_seconds"] = found["wait"]
     return out, numbers
+
+
+def problems_sound(result: dict, desktop: list[dict], copy: bool) -> tuple[list[str], dict]:
+    out = [f"error: {result['error']}"] if "error" in result else []
+    out += stderr_problems(result)
+    lines = stdout_lines(result)
+    downloads = [l for l in lines if "Downloading" in l]
+    asked = model_requests(result)
+    if copy:
+        if downloads:
+            out.append("the copy was not used: it downloaded again")
+        if asked:
+            out.append(f"the model site was asked although a copy was kept: {asked}")
+    else:
+        line = DOWNLOAD_LINE.format(task="sound", mb=SIZE_MB["sound"])
+        if lines.count(line) != 1:
+            out.append(f"expected the line {line!r} exactly once, got {downloads}")
+        if len(asked) != FILES["sound"] or any(r["status"] != 200 for r in asked):
+            out.append(f"expected {FILES['sound']} good request to the model site, got {asked}")
+    found = parse_sounds(lines)
+    if len(found) != len(SOUND_CLIPS):
+        out.append(f"Play named {len(found)} of {len(SOUND_CLIPS)} sounds: {lines[-4:]}")
+    numbers = compare_sound(desktop, found)
+    for row in numbers["clips"]:
+        if not row["same"]:
+            out.append(f"{row['clip']}: the names differ: desktop {row.get('names_desktop')}, Play {row.get('names_play')}")
+        elif row["rate"] == 16000:
+            out.append(f"{row['clip']} reached the page at 16 kHz, so its resampling, which every microphone needs, was not tested")
+    speed = parse_json_line(lines, "speed")
+    if speed is None:
+        out.append("the second answer never came")
+    else:
+        numbers["answer_seconds"] = speed["seconds"]
+        numbers["recording_seconds"] = speed["recording"]
+        numbers["real_time_factor"] = round(speed["seconds"] / speed["recording"], 3)
+    numbers["first_waits_seconds"] = [row["wait"] for row in found]
+    return out, numbers
+
+
+def problems_microphone(result: dict) -> tuple[list[str], dict]:
+    out = [f"error: {result['error']}"] if "error" in result else []
+    out += stderr_problems(result)
+    found = parse_json_line(stdout_lines(result), "microphone")
+    if found is None:
+        return out + ["the sketch printed no microphone line"], {}
+    if not found["answers"]:
+        out.append("no sound was named from the fake microphone in 60 s")
+    elif found["rate"] == 16000:
+        out.append("the microphone ran at 16 kHz, so its resampling was not tested")
+    return out, found
 
 
 def mask_time_of(result: dict) -> tuple[list[str], str]:
@@ -456,11 +582,14 @@ def main() -> int:
     desktop_heard = desktop_words(args.ml_python, args.funground, hf_dir)
     print("desktop words:", desktop_heard, flush=True)
 
+    desktop_named = desktop_sound(args.ml_python, args.funground, hf_dir)
+    print("desktop sound:", [(row["clip"], row["name"], [g["name"] for g in row["next"]]) for row in desktop_named], flush=True)
+
     wanted = [c for c in cases(args.funground / "ml" / "tests" / "data") if not (args.skip_speed and c["id"].startswith("speed"))
               and (args.only is None or args.only in c["id"])]
     if args.live:
         for c in wanted:
-            if c["id"] in ("pose", "hand", "person", "words"):
+            if c["id"] in ("pose", "hand", "person", "words", "sound"):
                 c["hf"] = "live"
     report = run_page(wanted, hf_dir, args.live, args.timeout, kept_names(args.funground))
     results = {r["id"]: r for r in report.get("cases", [])}
@@ -488,6 +617,13 @@ def main() -> int:
         if case_id in results:
             found, summary[case_id] = problems_words(results[case_id], desktop_heard, copy)
             check(case_id, found)
+    for case_id, copy in (("sound", False), ("sound from the copy", True)):
+        if case_id in results:
+            found, summary[case_id] = problems_sound(results[case_id], desktop_named, copy)
+            check(case_id, found)
+    if "sound microphone" in results:
+        found, summary["sound microphone"] = problems_microphone(results["sound microphone"])
+        check("sound microphone", found)
     if "mask time" in results:
         found, summary["mask time"] = mask_time_of(results["mask time"])
         check("mask time", found)
@@ -513,7 +649,7 @@ def main() -> int:
     summary["speed"] = speeds
     summary["hosts"] = hosts_seen
     summary["failures"] = sorted(set(failures))
-    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop, "desktop_words": desktop_heard,
+    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop, "desktop_words": desktop_heard, "desktop_sound": desktop_named,
                                                         "desktop_person": {k: v for k, v in desktop_person.items() if k != "plane"}}, indent=1),
                                             encoding="utf-8")
     print(json.dumps(summary, indent=1))
