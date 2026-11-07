@@ -6,35 +6,16 @@
 # time of one answer (with the model already loaded) can be printed.
 import json
 import time
-import wave
-from array import array
 
 import funground as f
 from funground import ml, sound
 
-ENGINE_RATE = 44100                # the rate every sound has here, as a microphone's has
 LIMIT = 6000                       # frames to wait for an answer: in a browser the first one takes a few seconds
 
 
-def read(name):
-    """The recording as a Sound at 44.1 kHz, made here by linear interpolation in plain Python. sound.load() is not used: it decodes
-    and resamples with another library on a computer than in a page (measured: the same file gives waveforms about 13 percent
-    apart in size), and this test is about the model, which must be given the same numbers on both."""
-    with wave.open(name) as wav:
-        rate = wav.getframerate()
-        raw = array("h")
-        raw.frombytes(wav.readframes(wav.getnframes()))
-    x = [v / 32768.0 for v in raw]
-    out = []
-    for j in range(int(len(x) * ENGINE_RATE / rate)):
-        p = j * rate / ENGINE_RATE
-        i = int(p)
-        t = p - i
-        out.append(x[i] * (1 - t) + x[min(i + 1, len(x) - 1)] * t)
-    return sound.create(out, ENGINE_RATE)
-
-
-clips = [(name, read(name)) for name in SOUNDS]
+started = time.time()
+clips = [(name, sound.load(name)) for name in SOUNDS]
+print("loaded " + json.dumps({"seconds": round(time.time() - started, 3), "recording": round(sum(c.duration() for _, c in clips), 3)}))
 index = 0
 asked = None
 second = None
@@ -66,7 +47,7 @@ def draw():
             print("sound none " + name)
             index, asked = index + 1, None
         if index == len(clips):
-            again = read(SOUNDS[0])
+            again = sound.load(SOUNDS[0])
             started = time.time()
     elif second is None:
         second = ml.sound(again)
