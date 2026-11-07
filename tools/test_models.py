@@ -29,7 +29,7 @@ not test: a real microphone (headless Chrome has only its fake one, which plays 
 microphone's own sample rate (the recording is sent whole, at the sound engine's rate).
 
 The sound names (S-250) are a window of sound, not a picture. tests/runner/models_sound_sketch.py names three recordings
-(ml/tests/data: tts.wav, whistle.wav and clapping.wav) as ml.sound(sound), each made from the file by the sketch itself and prints for each the name, the score and the
+(ml/tests/data: tts.wav, whistle.wav and clapping.wav) as ml.sound(sound.load(name)) and prints for each the name, the score and the
 names of the next guesses; on the desktop that runs funground-ml's _yamnet.py (numpy and onnxruntime), in the browser the models worker
 does the same sums in JavaScript and sends the 521 scores back; the choosing of names is the same Python in both. The test passes when
 the name and the names of the next guesses are the same for every recording; the largest difference of a score is reported, not
@@ -38,10 +38,8 @@ resampling, which every microphone needs, would not have been tested). The sketc
 answer (the model already loaded) is the real-time factor. One more case, "sound microphone", runs ml.sound(mic) on Chrome's fake
 microphone (a beep every second) and needs answers to come; its names are reported, not compared (the fake sound is not a recording we
 can play the desktop). What this does not test: a real microphone.
-The sketch makes each Sound itself (reads the .wav, resamples to 44.1 kHz in plain Python, sound.create) and does not use sound.load():
-found while writing this test, sound.load() gives the model another waveform on a computer than in a page for the same file (clapping.wav:
-the sum of absolute values 25447 on the desktop, 22125 in the page, and 22125 by exact linear interpolation), which is a difference in
-the core's decoder, not in the model.
+The recordings go through sound.load() (S-259), so this also checks that a file read in a page has the desktop's samples: the files are
+at 16 kHz, and the sound model tells the two apart when they differ.
 
 Cases, run in one Chrome (one temporary profile, so Cache Storage carries over from case to case):
 
