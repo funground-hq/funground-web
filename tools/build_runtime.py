@@ -264,7 +264,18 @@ def copy_examples(root: Path, out: Path) -> int:
 
 # ---- main
 
+def check_runner_files() -> None:
+    """Stop before building if runner/files.json does not name every script the runner loads (check_runner_files.py)."""
+    spec = importlib.util.spec_from_file_location("check_runner_files", Path(__file__).with_name("check_runner_files.py"))
+    check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check)
+    found = check.problems()
+    if found:
+        raise SystemExit("runner/files.json is out of date:\n  " + "\n  ".join(found))
+
+
 def main() -> None:
+    check_runner_files()
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--funground", required=True, type=Path, help="a funground checkout (the branch to run in the browser)")
     parser.add_argument("--ml", type=Path, help="funground-ml's folder (default: ml/ in the funground checkout)")
