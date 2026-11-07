@@ -102,6 +102,14 @@ const result = await runner.keep("I kept the low circle because it looks deliber
   after `f.stop()` the picture is gone: the answer is `{ ok: false, reason }`.
 - It also resolves `{ ok: false }` if the worker does not answer within ten seconds.
 
+## The runner's files
+
+`files.json` names the runner's own scripts. A site that serves the runner copies exactly those, and `runtime/`
+(funground-hq.github.io's `tools/assemble.py`). A new script goes on the list in the same change that adds it:
+`tools/check_runner_files.py` fails when a script loads one that is not named, when a named one is missing, or when
+a script in `runner/` is not named, and `tools/build_runtime.py` runs it before building. On 7 Nov 2026 the site's
+own list lacked `models-glue.js` and `models-worker.js`, and no sketch could start in Play.
+
 ## The runtime folder
 
 `runtime/` (git-ignored) holds what the page loads from its own origin: GitHub release downloads carry no CORS

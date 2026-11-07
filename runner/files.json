@@ -1,0 +1,12 @@
+{
+ "about": "The runner's own scripts, by name. Whoever serves the runner copies exactly these, and runtime/ (funground-hq.github.io's tools/assemble.py does). tools/check_runner_files.py fails if a script loads one that is not here; tools/build_runtime.py runs it.",
+ "files": [
+  "runner.js",
+  "worker.js",
+  "audio.js",
+  "camera.js",
+  "microphone-worklet.js",
+  "models-glue.js",
+  "models-worker.js"
+ ]
+}
