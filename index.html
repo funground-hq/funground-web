@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>funground-web</title>
+<meta name="description" content="funground in the browser: Python in a Web Worker, funground's real renderer, sound and the microphone, with no installing.">
+<style>
+  :root { --bg: #fbf9f4; --fg: #1f1e1b; --muted: #66645d; --line: #e2ddd1; --code: #f1ede3; --accent: #2a6b4f; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #151513; --fg: #eceae4; --muted: #a3a199; --line: #34322d; --code: #22211e; --accent: #7cc6a0; }
+  }
+  :root[data-theme="dark"] { --bg: #151513; --fg: #eceae4; --muted: #a3a199; --line: #34322d; --code: #22211e; --accent: #7cc6a0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 2rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.2rem; margin: 40px 0 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .lead { color: var(--muted); font-size: 1.1rem; margin: 0 0 24px; }
+  a { color: var(--accent); }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+  pre { background: var(--code); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: .85rem; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  ol, ul { padding-left: 1.3em; }
+  li { margin: 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .muted { color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>funground-web</h1>
+  <p class="lead">funground in the browser: a learner's Python sketch runs in a web page, with no installing.</p>
+
+  <p>funground is a small Python library for learning to code by drawing. This repository is its web target. It runs
+  Python (Pyodide) in a Web Worker, and draws with funground's own renderer: Cairo, HarfBuzz and Skia's path tools,
+  compiled to WebAssembly. Nothing is stubbed, so a sketch draws the same picture in the browser as on a computer.
+  Sound and the microphone go through Web Audio, the camera through the browser, and pose and hand tracking through
+  onnxruntime-web.</p>
+
+  <h2>What is here</h2>
+  <table>
+    <tr><th>Folder</th><th>What it holds</th></tr>
+    <tr><td><code>runner/</code></td><td>The browser runner: <code>runner.js</code> (the page side), <code>worker.js</code> (Python in a module worker), sound, microphone, camera and models. <a href="runner/README.md">How a page uses it</a></td></tr>
+    <tr><td><code>vscode-extension/</code></td><td>A VS Code extension that runs a sketch in a panel beside the editor, on the desktop and in github.dev</td></tr>
+    <tr><td><code>tools/</code></td><td>Builds the runtime (<code>build_runtime.py</code>) and tests the runner in headless Chrome</td></tr>
+    <tr><td><code>spikes/</code></td><td>Time-boxed experiments and their results, for example <a href="spikes/S-271/RESULTS.md">S-271, plain Python in the runner</a></td></tr>
+  </table>
+
+  <h2>Quick usage guide</h2>
+  <ol>
+    <li><strong>Build the runtime.</strong> The runner needs <code>runner/runtime/</code>: funground's wheel, the
+      compiled libraries and a manifest. It is built, not stored in the repository, so it is not on this site. From a
+      checkout of this repository and of funground:
+      <pre><code>python tools/build_runtime.py --funground path/to/funground</code></pre>
+    </li>
+    <li><strong>Serve the folder</strong> from any static web server. Pyodide itself comes from jsDelivr.</li>
+    <li><strong>Make a runner and run a sketch</strong> from a page:
+<pre><code>&lt;canvas id="canvas" width="640" height="400"&gt;&lt;/canvas&gt;
+&lt;pre id="output"&gt;&lt;/pre&gt;
+&lt;script type="module"&gt;
+  import { createRunner } from "./runner/runner.js";
+
+  const runner = await createRunner({
+    canvas: document.getElementById("canvas"),
+    output: document.getElementById("output"),   // print() and tracebacks
+  });                                             // resolves when Python is ready
+
+  const source = `import funground as f
+
+def draw():
+    f.background("white")
+    f.circle(f.mouse_x, f.mouse_y, 40)
+
+f.run()`;
+  await runner.run(source, { filename: "sketch.py" });
+  // runner.stop() ends the run at once, even a `while True:` loop
+&lt;/script&gt;</code></pre>
+    </li>
+    <li><strong>Go further</strong>: files beside the sketch, saved files, sound, the camera, models and the options for
+      editors are in the <a href="runner/README.md">runner's README</a>. <code>runner/demo.html</code> is a
+      working example page.</li>
+  </ol>
+
+  <h2>Try it without building</h2>
+  <p><a href="spikes/S-271/phone.html">The S-271 phone check</a> loads Pyodide alone (no funground), and runs a short
+  plain Python script, then shows how long it took. It works on a phone too.</p>
+
+  <p class="muted">Part of funground 0.2's web target. Licence: see <a href="LICENSE">LICENSE</a>.</p>
+</main>
+</body>
+</html>
