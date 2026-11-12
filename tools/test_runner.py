@@ -171,6 +171,14 @@ def scale_check(case: dict, snaps: Path, dpr: float) -> dict:
     return {"id": case["id"], "size": list(actual.size), "expected_size": expected, "size_ok": close, "colours": colours, "blank": colours <= 1}
 
 
+def check_capabilities(ready: dict | None, checks: dict[str, bool]) -> dict[str, bool]:
+    """S-275: every word in `ready`'s capabilities has checks named after it (\"stdin: ...\"), and they all pass."""
+    words = (ready or {}).get("capabilities") or []
+    tested = {word: [ok for name, ok in checks.items() if name.startswith(word + ": ")] for word in words}
+    return {"capabilities: ready lists what the runner can do, and every word has passing checks of its own": (
+        bool(words) and all(results and all(results) for results in tested.values()))}
+
+
 def check_scenarios(scenarios: dict) -> dict[str, bool]:
     """Pass or fail for the scenarios with an exact answer: fonts on demand (S-211) and saved files (S-212)."""
     checks: dict[str, bool] = {}
@@ -232,6 +240,17 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             none[:2] == ["before", "Your name? "] and "OSError: [Errno 29] I/O error" in none[-1])
         checks["stdin: stdin that is not a list of strings gives one clear error"] = (
             stdin["bad"]["ok"] is False and any("stdin must be a list of strings" in t for t in texts(stdin["bad"])))
+    errors = scenarios.get("errors")
+    if errors:
+        said = [line["text"] for line in errors["output"]]
+        checks["run: a file runs, its print() reaches the page, and its error names the learner's file and line"] = (
+            errors["started"] is True and "hello 42" in said
+            and any("ZeroDivisionError" in s and 'File "bad.py", line 5' in s for s in said))
+    stop = scenarios.get("stop")
+    if stop:
+        checks["stop: stop() ends a sketch stuck in while True at once, the page stays alive, and the next run works"] = (
+            stop["stop_call_ms"] < 100 and stop["frames_after_stop"] == 0 and stop["page_beats_in_1s"] >= 10
+            and stop["next_run_ok"] is True)
     keeps = scenarios.get("keeps")
     if keeps:
         first, second, ended, stopped = keeps["first"], keeps["second"], keeps["ended"], keeps["stopped"]
@@ -320,6 +339,8 @@ def main() -> int:
     else:
         report["scaled"] = [scale_check(c, snaps, args.dpr) for c in taken]
     report["checks"] = check_scenarios(report["scenarios"])
+    if not args.skip_scenarios:
+        report["checks"].update(check_capabilities(report.get("ready"), report["checks"]))
     (out / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     summary = {k: v for k, v in report.items() if k not in ("server_bytes", "ready", "cases")}
     summary["cases"] = [{k: c.get(k) for k in ("id", "start_ms", "frame_ms", "error")} for c in report["cases"]]
