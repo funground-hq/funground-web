@@ -187,7 +187,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
 
   // ---- running
 
-  async function runSketch(source, { filename = "sketch.py", files = {}, width, height, seed } = {}) {
+  async function runSketch(source, { filename = "sketch.py", files = {}, width, height, seed, stdin } = {}) {
     audio.unlock();                                                // Run is a click or a key: the moment the browser allows sound
     if (run) await stopRun();
     worker ??= startWorker();
@@ -197,7 +197,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     frames = 0;
     return new Promise((resolve) => {
       run = { resolve, waiting: false, animation: 0 };
-      worker.worker.postMessage({ type: "run", source, filename, width: logical.width, height: logical.height, scale, files, seed });
+      worker.worker.postMessage({ type: "run", source, filename, width: logical.width, height: logical.height, scale, files, seed, stdin });
     });
   }
 
