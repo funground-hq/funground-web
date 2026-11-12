@@ -304,6 +304,15 @@ def check_packages(packages: dict) -> dict[str, bool]:
     return checks
 
 
+def check_sources(ready: dict | None) -> dict[str, bool]:
+    """S-277: a full start takes svgelements and pypdf from its own runtime folder and asks PyPI for nothing."""
+    names = [r["name"] for r in (ready or {}).get("resources", [])]
+    from_pypi = [n for n in names if "pypi.org" in n or "pythonhosted.org" in n]
+    own = [n for n in names if "/runtime/wheels/" in n and ("svgelements-" in n or "pypdf-" in n)]
+    return {"run: a full start fetches nothing from PyPI, and svgelements and pypdf from its own runtime": (
+        bool(names) and not from_pypi and len(own) == 2)}
+
+
 def check_scenarios(scenarios: dict) -> dict[str, bool]:
     """Pass or fail for the scenarios with an exact answer: fonts on demand (S-211) and saved files (S-212)."""
     checks: dict[str, bool] = {}
@@ -547,6 +556,7 @@ def main() -> int:
     else:
         report["scaled"] = [scale_check(c, snaps, args.dpr) for c in taken]
     report["checks"] = check_scenarios(report["scenarios"])
+    report["checks"].update(check_sources(report.get("ready")))
     if not args.skip_scenarios:
         report["checks"].update(check_capabilities(report.get("ready"), report["checks"]))
     (out / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")

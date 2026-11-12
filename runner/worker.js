@@ -278,8 +278,9 @@ async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxrunt
   lap("packages");
 
   // funground's dependencies, each from where it is found: the C-extension wheels (pycairo, uharfbuzz, skia-pathops) from
-  // our own runtime folder, fonttools from Pyodide, svgelements and pypdf from PyPI (or from the runtime folder when its
-  // manifest lists them as "dependency", for a host that must not reach PyPI), pygame-ce on demand (ON_DEMAND).
+  // our own runtime folder, fonttools from Pyodide, svgelements and pypdf from the runtime folder too (role "dependency",
+  // pinned by tools/build_runtime.py since S-277; only a runtime built before that falls back to PyPI), pygame-ce on demand
+  // (ON_DEMAND).
   // So funground itself is installed without dependencies: with them, micropip would fetch pygame-ce for every run.
   py.globals.set("c_wheels", wheelUrls("c-extension"));
   py.globals.set("dependency_wheels", wheelUrls("dependency"));
