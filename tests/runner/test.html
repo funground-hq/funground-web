@@ -335,6 +335,36 @@ f.show()
   report.scenarios.web_fonts = result;
 }
 
+log('input lines');
+// ---- Input lines (S-272): run(source, {stdin}) feeds input() and sys.stdin; the lines running out is one plain EOFError.
+// Output without a newline is sent when input() reads and when the run ends. A reused runner (Play's preview) checks that
+// nothing carries over from one run to the next: neither a last line nor the lines themselves.
+{
+  const out = [];
+  let ended = null;
+  const runner = await createRunner({
+    canvas: document.createElement("canvas"), baseUrl: new URL("/runner/", location.href), reuse: true,
+    output: (text, stream) => out.push({ stream, text }), onFinish: (reason) => { ended = reason; },
+  });
+  const runScript = async (source, options) => {
+    out.length = 0; ended = null;
+    const started = await runner.run(source, { filename: "main.py", ...options });
+    await until(() => ended !== null, 30000, "the script to end").catch(() => {});
+    await sleep(100);
+    return { ok: started.ok, ended, output: out.map((l) => ({ ...l })) };
+  };
+  const reader = 'name = input("Your name? ")\nage = int(input("Age? "))\nprint(f"{name} is {age}")\ninput("third? ")\nprint("never")\n';
+  report.scenarios.stdin = {
+    two: await runScript(reader, { stdin: ["Ada", "12"] }),
+    readline: await runScript("import sys\nprint(repr(sys.stdin.readline()), repr(input()))\n", { stdin: ["first", "second"] }),
+    partial: await runScript('print("a")\nprint("no newline", end="")\n'),
+    next: await runScript('print("next run")\n'),
+    none: await runScript('print("before")\ninput("Your name? ")\n'),
+    bad: await runScript('print(1)\n', { stdin: "Ada" }),
+  };
+  runner.stop();
+}
+
 log('keep');
 // ---- Keep (S-226): runner.keep(note) runs f.keep(note); studio/001.png, .py and .json each reach onFile once
 // Its own runner, made as Play's preview makes it (reuse: true): then a script that has ended keeps its Python and can still be kept.

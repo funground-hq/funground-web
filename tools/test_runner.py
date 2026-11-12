@@ -214,6 +214,24 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             second.get("ok") and not second.get("requests") and not second.get("output"))
         checks["web fonts: an address that cannot be reached gives the plain sentence"] = (
             "could not download" in "".join(bad.get("output", [])) and "Add file" in "".join(bad.get("output", [])))
+    stdin = scenarios.get("stdin")
+    if stdin:
+        texts = lambda run: [line["text"] for line in run["output"]]
+        two = texts(stdin["two"])
+        checks["stdin: two lines are read in order, each prompt is sent before its read"] = (
+            two[:3] == ["Your name? ", "Age? ", "Ada is 12"] and "never" not in two)
+        checks["stdin: a third input() raises the plain EOFError sentence, with no frame of the runner's"] = (
+            stdin["two"]["ended"] == "error" and two[3:4] == ["third? "]
+            and "EOFError: input() has no more lines to read: this run was given 2." in two[-1]
+            and 'File "main.py", line 4' in two[-1] and "<runner>" not in two[-1] and "<exec>" not in two[-1])
+        checks["stdin: sys.stdin.readline() reads the same lines"] = texts(stdin["readline"]) == ["'first\\n' 'second'"]
+        checks["stdin: a last line without a newline is sent when the run ends, and not with the next run"] = (
+            texts(stdin["partial"]) == ["a", "no newline"] and texts(stdin["next"]) == ["next run"])
+        none = texts(stdin["none"])
+        checks["stdin: without stdin input() raises OSError as before, after its prompt (a reused worker forgets the lines)"] = (
+            none[:2] == ["before", "Your name? "] and "OSError: [Errno 29] I/O error" in none[-1])
+        checks["stdin: stdin that is not a list of strings gives one clear error"] = (
+            stdin["bad"]["ok"] is False and any("stdin must be a list of strings" in t for t in texts(stdin["bad"])))
     keeps = scenarios.get("keeps")
     if keeps:
         first, second, ended, stopped = keeps["first"], keeps["second"], keeps["ended"], keeps["stopped"]

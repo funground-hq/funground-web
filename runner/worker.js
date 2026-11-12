@@ -7,8 +7,9 @@
 //     init   {runtimeUrl?, pyodideUrl?, onnxruntimeUrl?, modelsScripts?}   load Pyodide and install everything; answers `ready`.
 //                                           `onnxruntimeUrl` is the folder onnxruntime-web loads from (default below); `modelsScripts`
 //                                           is {worker, glue}, the addresses of models-worker.js and models-glue.js
-//     run    {source, filename, width, height, scale, files, seed?}   start the file; answers `started`. `files` maps a path
-//                                           to bytes: data beside the sketch, and other .py files it may import
+//     run    {source, filename, width, height, scale, files, seed?, stdin?}   start the file; answers `started`. `files` maps a path
+//                                           to bytes: data beside the sketch, and other .py files it may import. `stdin` (S-272)
+//                                           is a list of strings, the lines input() and sys.stdin read in order
 //     step   {now}                          one display frame, `now` in seconds; answers `stepped`
 //     event  {kind, x, y, button, key, keyCode, delta}   one input event (funground's InputEvent vocabulary)
 //     microphone {samples}                  a Float32Array of mono samples (-1 to 1, 44 100 Hz) the microphone heard
@@ -24,7 +25,8 @@
 //     started  {width, height, running}         the file ran; the canvas size it asked for (logical pixels)
 //     frame    {pixels, width, height}          RGBA bytes (physical pixels); the ArrayBuffer is transferred
 //     stepped  {running}                        the step is done; false when the sketch has ended
-//     output   {stream, text}                   one line of print() ("stdout") or of an error ("stderr")
+//     output   {stream, text}                   one line of print() ("stdout") or of an error ("stderr"), without its newline; or
+//                                               text with no newline yet, sent when input() reads or the run ends (S-272)
 //     error    {message}                        the file or the setup failed (message is a Python traceback)
 //     sound    {command, voice, fields, samples} a sound command for Web Audio (funground/platform/browser_audio.py has the
 //                                               list); `samples` is a Float32Array whose buffer is transferred, for "load" only
@@ -123,7 +125,57 @@ let sketchFile = "sketch.py";
 let known = new Map();                  // file name -> "size:modified" for each file of the run's folder already seen or sent
 
 const post = (message, transfer = []) => postMessage(message, transfer);
-const output = (stream) => (text) => post({ type: "output", stream, text });
+
+// Output (S-272). Python writes bytes; each complete line goes to the page as one `output` message, as before. What is left
+// without a newline (a prompt, a print(..., end="")) waits here until flushOutput(): before input() reads a line, and when
+// a run ends. Pyodide's own line mode cannot do that, because it has no flush (S-271: a last line printed with end="" was lost,
+// or, with `reuse`, came out at the front of the next run's output). Python's stdout stays line-buffered with this writer.
+function lineWriter(stream) {
+  const decoder = new TextDecoder();
+  let pending = "";
+  return {
+    write(bytes) {
+      pending += decoder.decode(bytes, { stream: true });
+      const lines = pending.split("\n");
+      pending = lines.pop();
+      for (const text of lines) post({ type: "output", stream, text });
+      return bytes.length;
+    },
+    flush() {
+      pending += decoder.decode();
+      if (pending) post({ type: "output", stream, text: pending });
+      pending = "";
+    },
+  };
+}
+const writers = { stdout: lineWriter("stdout"), stderr: lineWriter("stderr") };
+
+// Whatever Python still holds, then whatever is waiting here, goes out now.
+function flushOutput() {
+  if (!py) return;
+  py.runPython("import sys\nsys.stdout.flush()\nsys.stderr.flush()");
+  writers.stdout.flush();
+  writers.stderr.flush();
+}
+
+// Input lines (S-272, D-139 a). With `stdin`, input() and sys.stdin read the run's lines in order; Pyodide adds the newline
+// that input() takes off. Before each read the output is flushed, so input()'s prompt reaches the page first. When the lines
+// run out, input() raises EOFError with one plain sentence (`use_input_lines` in the glue). Without `stdin`, Pyodide's own
+// stdin is put back: input() raises OSError [Errno 29], as before S-272.
+function setInputLines(stdin) {
+  if (stdin === undefined || stdin === null) {
+    py.setStdin();
+    py.globals.get("use_input_lines")(null);
+    return;
+  }
+  if (!Array.isArray(stdin) || stdin.some((line) => typeof line !== "string" || line.includes("\n"))) {
+    throw new Error("run(): stdin must be a list of strings, one for each line input() reads, with no newline in them");
+  }
+  let next = 0;
+  // input() has flushed Python's own buffer before it reads (measured, S-272), so only what waits here is sent: no call back into Python
+  py.setStdin({ stdin: () => { writers.stdout.flush(); writers.stderr.flush(); return next < stdin.length ? stdin[next++] : null; } });
+  py.globals.get("use_input_lines")(stdin.length);
+}
 
 // Fonts (S-211, D-114 b). funground's bundled fonts (4.2 MB, 2.4 MB of the wheel) are not in the wheel. Nothing is fetched at
 // start-up: the Session is given `fetch_font`, and funground calls it the first time it opens a bundled font (typography.py,
@@ -175,10 +227,10 @@ async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxrunt
   const { loadPyodide } = await import(pyodideUrl + "pyodide.mjs");
   py = await loadPyodide({
     indexURL: pyodideUrl,
-    stdout: output("stdout"),
-    stderr: output("stderr"),
     env: { SDL_VIDEODRIVER: "dummy", FUNGROUND_HEADLESS: "1", PYGAME_HIDE_SUPPORT_PROMPT: "1" },
   });
+  py.setStdout({ write: writers.stdout.write });
+  py.setStderr({ write: writers.stderr.write });
   lap("pyodide");
 
   const manifest = await (await fetch(new URL("manifest.json", runtime))).json();
@@ -206,7 +258,7 @@ await micropip.install(funground_wheel, deps=False)
   runtimeFolder = { url: runtime, manifest };
   lap("wheels");
 
-  py.runPython(PYTHON_GLUE);
+  py.runPython(PYTHON_GLUE, { filename: "<runner>" });                   // its frames are taken out of a learner's traceback (fail)
   const versions = py.globals.get("check_real_libraries")().toJs({ dict_converter: Object.fromEntries });
   lap("check");
 
@@ -225,6 +277,25 @@ from array import array
 
 sys.dont_write_bytecode = True          # a helper edited and run again is always read from its source
 run_folder = None
+
+import builtins
+_builtin_input = builtins.input
+
+def use_input_lines(count):
+    """S-272: with count lines given (setInputLines), input() raises one plain sentence when they run out instead of
+    CPython's "EOF when reading a line"; with None, the built-in input() is put back."""
+    if count is None:
+        builtins.input = _builtin_input
+        return
+
+    def input(prompt=""):
+        try:
+            return _builtin_input(prompt)
+        except EOFError:
+            pass
+        raise EOFError(f"input() has no more lines to read: this run was given {count}.")
+
+    builtins.input = input
 
 def enter_run_folder():
     """A new folder for this run's files: the working folder, and first on the import path, where "python sketch.py"
@@ -299,7 +370,9 @@ def check_real_libraries():
 
 // ---- a run
 
-async function run({ source, filename, width, height, scale, files, seed }) {
+async function run({ source, filename, width, height, scale, files, seed, stdin }) {
+  sketchFile = filename;
+  setInputLines(stdin);                                                    // this run's lines, or none (a reused worker forgets the last run's)
   py.globals.get("enter_run_folder")();                                    // a folder of its own: the file's files, saves and imports
   known = new Map();
   for (const [name, bytes] of Object.entries(files ?? {})) {               // beside the sketch: "data/photo.jpg", "helpers.py"
@@ -314,7 +387,6 @@ async function run({ source, filename, width, height, scale, files, seed }) {
   await py.loadPackage(needed.packages, { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   await installWheels(needed.wheels);
   const { Session } = py.pyimport("funground.web");
-  sketchFile = filename;
   session = Session(width, height, scale, postFrame, postSound, postMicrophoneRequest, postCameraRequest,
                     fonts.fetchFont, py.toPy(fonts.checks), fetchUrl, postModelsRequest);
   if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // the Session's own sketch: a repeatable run (goldens)
@@ -325,6 +397,7 @@ async function run({ source, filename, width, height, scale, files, seed }) {
     return fail(error);
   }
   sendNewFiles();                                                          // a script saves while it runs
+  if (!session.running) flushOutput();                                     // a script has ended: its last line, even without a newline
   const [canvasWidth, canvasHeight] = session.canvas_size.toJs();
   post({ type: "started", width: canvasWidth, height: canvasHeight, running: session.running });
 }
@@ -352,6 +425,7 @@ function step({ now }) {
     fail(error);
   }
   sendNewFiles();                                                          // f.save() writes at the end of a frame: seen by the step that ends it
+  if (!running) flushOutput();                                             // the sketch has ended
   post({ type: "stepped", running });
 }
 
@@ -419,9 +493,11 @@ function event({ kind, x, y, button, key, keyCode, delta }) {
   session?.push_event(kind, x, y, button ?? undefined, key ?? undefined, keyCode ?? undefined, delta ?? 0);
 }
 
-// A learner sees the traceback from their own file down, not the host's frames above it.
+// A learner sees the traceback from their own file down, not the host's frames above it, nor the runner's own (input(): S-272).
+// What the run printed comes first, a last line without a newline too.
 function fail(error) {
-  const message = String(error.message ?? error);
+  try { flushOutput(); } catch { /* Python itself is broken: the error says why */ }
+  const message = String(error.message ?? error).replace(/^ {2}File "<runner>", line \d+, in .*\n(?: {4}.*\n)*/gm, "");
   const first = message.indexOf(`File "${sketchFile}"`);
   const trimmed = first < 0 ? message : "Traceback (most recent call last):\n  " + message.slice(first);
   post({ type: "error", message: trimmed });
@@ -538,6 +614,7 @@ function stop() {
   } finally {
     if (session) sendNewFiles();                                           // what the sketch saved in finish(), before the next run deletes its folder
     session = null;
+    flushOutput();                                                         // what finish() printed, before the next run's output
     post({ type: "stopped" });
   }
 }

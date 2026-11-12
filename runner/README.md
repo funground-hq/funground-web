@@ -56,6 +56,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 | `microphoneRefusal` | none | For a host that does not allow the microphone (VS Code's panel): the line a sketch that calls `mic.start()` gets in its output instead. The browser is not asked, and the sketch hears nothing (as after a refusal). |
 | `cameraRefusal` (S-172) | none | For a host that does not allow the camera (VS Code's panel): why, in a few words. A sketch that calls `cam.start()` gets "The camera is not available: *reason*." in its output; the browser is not asked, and the camera is never ready (as after a refusal). |
 | `run(source, {seed})` | none | Seed funground's random numbers for this run, so every run draws the same (tests compare frames with goldens). It is applied to the run's own sketch, after funground's `Session` is made. |
+| `run(source, {stdin})` (S-272) | none | The lines `input()` reads, as a list of strings (see "Input lines" below). |
 
   A runner whose files are on another origin (a VS Code webview loads them from its resource origin) starts its worker from a
   `blob:` URL. Results: `spikes/S-156_RESULTS.md`, `vscode-extension/RESULTS.md`.
@@ -63,6 +64,28 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
   folder is under `python sketch.py`). `run(..., {files})` writes into it, so `files` can hold data (`data/photo.png`) and
   other `.py` files the sketch imports (`helpers.py`); modules imported that way are forgotten when the run stops, so an
   edited helper is read again.
+
+## Input lines (S-272)
+
+A host gives the lines a run reads, one string for each `input()` (D-139 a):
+
+```js
+await runner.run('name = input("Your name? ")\nprint("Hello,", name)', { filename: "main.py", stdin: ["Ada"] });
+```
+
+- `input()` returns the lines in order, and `sys.stdin.readline()` reads the same lines. A line must not contain a newline.
+- The prompt is written to the output as CPython writes it, with no newline. It is sent as its own `output` message when
+  `input()` reads, so the example's output is two messages, `Your name? ` and `Hello, Ada`. Joined, they read
+  `Your name? \nHello, Ada`; CPython given the same line in a pipe prints `Your name? Hello, Ada` (WEB-D-001).
+- When the lines run out, `input()` raises `EOFError: input() has no more lines to read: this run was given 1.`, and the run
+  ends with an error, as any uncaught exception does.
+- Without `stdin`, a run behaves as before S-272: `input()` raises `OSError: [Errno 29] I/O error`. Its prompt is now shown
+  before the error (as the last output of the run, below).
+- Nobody types: there is no interactive input. Waiting for a person's typing inside the worker needs cross-origin isolation,
+  which is a later story.
+- Output that has no newline yet, a prompt or a `print(..., end="")`, is sent when `input()` reads and when the run ends
+  (the script finishes, the sketch ends or fails, or `stop()` with `reuse`). Before S-272 such a last line was lost, or with
+  `reuse` came out at the front of the next run's output (S-271).
 
 ## Files the sketch saves (S-212)
 
