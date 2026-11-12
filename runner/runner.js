@@ -40,9 +40,16 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  * @param {string | URL} [options.onnxruntimeUrl]  the folder onnxruntime-web loads from, for ml.pose() and ml.hand() (default: jsDelivr at one
  *   exact version, in worker.js). It holds ort.wasm.mjs and the .wasm file beside it
  * @param {string | URL} [options.runtimeUrl]  the folder holding manifest.json and the wheels (default: runtime/ under baseUrl)
- * @param {string[]} [options.packages]  what the worker loads besides Pyodide (S-274): left out or `["funground"]` is the full start
- *   (funground and its libraries, about 10 MB cold); `[]` is Pyodide alone (about 6 MB), and `run()` then runs a plain Python script. In this
- *   runner nothing else is accepted: more packages come with S-276. funground is implicit: it is always installed at start, never on import
+ * @param {Array<string | {name: string, url: string, sha256: string, imports?: string[]}>} [options.packages]  what learners' code may load
+ *   besides Python itself (S-274, S-276). Left out is the full start (funground and its libraries, about 10 MB cold) and nothing else may be
+ *   loaded. `"funground"` is funground (implicit: always installed at start, never on import; without it `run()` runs a plain Python script,
+ *   about 6 MB cold). Any other string is a Pyodide package by its name in Pyodide's lock file, such as `"numpy"` or `"scikit-learn"`;
+ *   what it depends on comes with it. An object is a host wheel: `{name, url, sha256, imports?}` (a wheel of `py3-none-any`, or of this
+ *   Pyodide's own platform; `url` is relative to `baseUrl`; `imports` are the names a learner imports, default `[name with "-" as "_"]`).
+ *   The runner checks the wheel's SHA-256 and installs it without pip or PyPI. An import of anything else fails with a sentence naming
+ *   what the page does offer. See "The host's packages" in README.md
+ * @param {"on import" | "at start"} [options.install]  when the listed Pyodide packages and wheels are loaded (default "on import"): just
+ *   before a `run()` or `check()` whose code imports them, or all of them before the runner is ready. Heavy packages (scikit-learn) belong at start
  * @param {boolean} [options.spare]  while a sketch runs, keep the next run's worker loaded too, so that a re-run (an editor
  *   re-running on every edit) starts at once instead of waiting for Python to load; costs a second Python's memory (default false)
  * @param {boolean} [options.reuse]  run the next sketch in the same worker when the last one has ended or stops when asked
@@ -55,11 +62,9 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
  * @returns {Promise<{info: object, run: Function, check: Function, stop: Function, keep: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
-  // S-274, D-144 e: [] (Pyodide alone) and ["funground"] are the two starts this runner has. Checked first, before anything is made.
-  if (packages !== undefined && !(Array.isArray(packages) && (packages.length === 0 || (packages.length === 1 && packages[0] === "funground")))) {
-    throw new Error('createRunner(): packages can only be [] or ["funground"] in this runner; other packages come later (S-276)');
-  }
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
+  // S-274, S-276, D-144 e: what `packages` and `install` may hold. Checked first, before anything is made.
+  const hostPackages = checkedPackages(packages, install, baseUrl);
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
@@ -92,7 +97,13 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   const keeping = new Map();             // request number -> what to do with the worker's answer
   if (canvas.tabIndex < 0) canvas.tabIndex = 0;                    // a canvas takes the keyboard only if it can be focused
 
-  const info = await worker.ready;       // a failure to load is thrown to the caller
+  let info;
+  try {
+    info = await worker.ready;           // a failure to load is thrown to the caller
+  } catch (error) {
+    worker.worker.terminate();           // with its Python (S-276: a name Pyodide does not have, a wheel refused at start)
+    throw error;
+  }
 
   // ---- workers
 
@@ -110,7 +121,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       };
     });
     slot.ready.catch(() => {});                                    // reported where it is awaited
-    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts, packages });
+    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts, packages: hostPackages, install });
     console.debug("runner: worker started");
     return slot;
   }
@@ -288,6 +299,30 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     cameraState: () => camera.state(),   // the camera open, and wanted by the sketch? (for tests and tools)
     get running() { return run !== null; },
   };
+}
+
+// S-276: `packages` and `install` as the worker takes them (wheel addresses made absolute here, because a worker started from a
+// blob: URL has no folder to resolve them against). One plain sentence for each mistake.
+function checkedPackages(packages, install, baseUrl) {
+  if (install !== undefined && install !== "on import" && install !== "at start") {
+    throw new Error('createRunner(): install must be "on import" or "at start".');
+  }
+  if (packages === undefined) return undefined;
+  if (!Array.isArray(packages)) throw new Error('createRunner(): packages must be a list, for example ["numpy"].');
+  return packages.map((entry) => {
+    if (typeof entry === "string" && entry.trim() !== "") return entry;
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("createRunner(): each entry of packages must be a package name or a wheel written as {name, url, sha256}.");
+    }
+    const { name, url, sha256, imports } = entry;
+    if (typeof name !== "string" || name === "" || typeof url !== "string" || url === "" || typeof sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(sha256)) {
+      throw new Error(`createRunner(): the wheel ${typeof name === "string" && name ? `"${name}" ` : ""}in packages needs a name, a url and a sha256 of 64 hexadecimal characters.`);
+    }
+    if (imports !== undefined && !(Array.isArray(imports) && imports.every((item) => typeof item === "string" && item !== ""))) {
+      throw new Error(`createRunner(): the imports of the wheel "${name}" must be a list of names.`);
+    }
+    return { name, url: new URL(url, baseUrl).href, sha256: sha256.toLowerCase(), ...(imports ? { imports: [...imports] } : {}) };
+  });
 }
 
 // A worker must come from the page's own origin. When the runner's files are on another one (a VS Code webview loads

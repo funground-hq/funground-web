@@ -4,10 +4,12 @@
 // The page drives it; every message has a `type`.
 //
 //   page -> worker
-//     init   {runtimeUrl?, pyodideUrl?, onnxruntimeUrl?, modelsScripts?, packages?}   load Pyodide and install everything; answers `ready`.
+//     init   {runtimeUrl?, pyodideUrl?, onnxruntimeUrl?, modelsScripts?, packages?, install?}   load Pyodide and install everything; answers `ready`.
 //                                           `onnxruntimeUrl` is the folder onnxruntime-web loads from (default below); `modelsScripts`
 //                                           is {worker, glue}, the addresses of models-worker.js and models-glue.js. `packages` (S-274):
-//                                           left out or ["funground"] installs funground; [] loads Pyodide alone (see "Pyodide alone")
+//                                           left out or ["funground"] installs funground; [] loads Pyodide alone (see "Pyodide alone").
+//                                           Pyodide packages and host wheels in `packages` are the host's (S-276, see "The host's packages");
+//                                           `install` is "on import" (default) or "at start"
 //     run    {source, filename, width, height, scale, files, seed?, stdin?}   start the file; answers `started`. `files` maps a path
 //                                           to bytes: data beside the sketch, and other .py files it may import. `stdin` (S-272)
 //                                           is a list of strings, the lines input() and sys.stdin read in order
@@ -83,7 +85,7 @@ const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 // What this runner can do, as words a host can look for in `ready` before it sends work (S-275, D-142 a). A word is added
 // by the story that ships it and never removed within a version line; tools/test_runner.py fails unless every word has
 // passing checks named after it ("stdin: ...").
-const CAPABILITIES = ["run", "stop", "stdin", "check"];
+const CAPABILITIES = ["run", "stop", "stdin", "check", "packages"];
 
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
 // onnxruntime-web, from jsDelivr at one exact version (the newest that was at least two weeks old when it was pinned: S-232, 2 November 2026).
@@ -128,6 +130,7 @@ function neededFor(sources) {
 }
 
 let py = null;
+let host = null;                        // S-276: the host's packages (prepareHost), or null when `packages` was left out
 let withFunground = true;               // false: Pyodide alone (S-274); run() then runs a plain script, never a Session
 let fonts = null;                      // {fetchFont, checks} for every Session (fontSupport)
 let session = null;
@@ -239,7 +242,7 @@ function fetchUrl(address) {
 // run() still runs as a sketch, D-088), and an implicit library is there before the first line runs. And when it is loaded
 // every file goes through its Session. There is no plain-script path in a runner that has funground; a runner
 // without it has nothing but the plain path (plainRun). The two never mix in one worker.
-async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts, packages }) {
+async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts, packages, install = "on import" }) {
   withFunground = packages === undefined || packages.includes("funground");
   const runtime = new URL(runtimeUrl ?? "runtime/", import.meta.url);
   onnxruntimeUrl = onnxruntimeOption ?? ONNXRUNTIME;
@@ -255,12 +258,15 @@ async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxrunt
   });
   py.setStdout({ write: writers.stdout.write });
   py.setStderr({ write: writers.stderr.write });
+  if (packages !== undefined) await prepareHost(packages, install, pyodideUrl);                // an unknown name stops the start here
   lap("pyodide");
 
   if (!withFunground) {
     // The glue imports only Python's own library, so it runs as it is. Nothing else is fetched: no micropip, no fonttools, no manifest.
     py.runPython(PYTHON_GLUE, { filename: "<runner>" });
+    configureOffer();
     const versions = { python: py.globals.get("python_version")(), pyodide: py.version };
+    await loadHostAtStart(versions);
     lap("glue");
     const resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize, transfer: e.transferSize }));
     return post({ type: "ready", versions, capabilities: CAPABILITIES, timings, resources, fonts: "none" });
@@ -292,32 +298,263 @@ await micropip.install(funground_wheel, deps=False)
   lap("wheels");
 
   py.runPython(PYTHON_GLUE, { filename: "<runner>" });                   // its frames are taken out of a learner's traceback (fail)
+  configureOffer();
   const versions = py.globals.get("check_real_libraries")().toJs({ dict_converter: Object.fromEntries });
+  await loadHostAtStart(versions);
   lap("check");
 
   const resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize, transfer: e.transferSize }));
   post({ type: "ready", versions, capabilities: CAPABILITIES, timings, resources, fonts: "on open" });
 }
 
+// ---- the host's packages (S-276, D-144 e)
+
+// `packages` lists what learners' code may load, and `install` says when. An entry is "funground" (implicit, see init), a Pyodide
+// package by its name in Pyodide's lock file, or a host wheel {name, url, sha256, imports?}. Nothing else is fetched: Python's own
+// library is there, and an import of anything not listed is left to fail, with a sentence naming what is offered (explain_missing in the
+// glue). Spike S-276 (branch spike/s276-packages of this repository) has the measurements behind each choice.
+//
+// A Pyodide package comes with what the lock file says it depends on. A host wheel comes without dependencies and is never resolved
+// by an installer: no micropip, never PyPI (14 ms to unpack against 360 ms through micropip). Its METADATA is read, and every
+// requirement it names must already be offered (the host lists it too), or the wheel is refused. The check is conservative: it
+// has no evaluator for environment markers, so a requirement with a marker other than `extra` counts as needed.
+const normalise = (name) => name.toLowerCase().replace(/[-_.]+/g, "-");             // PEP 503
+
+async function prepareHost(packages, install, pyodideUrl) {
+  const lock = await readLock(pyodideUrl);
+  const keys = new Map(Object.keys(lock.packages).map((name) => [normalise(name), name]));      // normalised -> the lock's own spelling
+  const wheels = packages.filter((entry) => typeof entry === "object");
+  const names = packages.filter((entry) => typeof entry === "string" && entry !== "funground");
+  const wheelKeys = new Set(wheels.map((entry) => normalise(entry.name)));
+  for (const name of names) {
+    if (!keys.has(normalise(name))) throw new Error(`"${name}" is not a package Pyodide has, so this page cannot offer it.`);
+  }
+  const listed = [...new Set(names.map((name) => keys.get(normalise(name))))];
+  const allowed = new Set();                                                   // lock names: the listed packages and what they depend on
+  const add = (name) => {
+    if (allowed.has(name)) return;
+    allowed.add(name);
+    (lock.packages[name].depends ?? []).forEach((dependency) => keys.has(normalise(dependency)) && add(keys.get(normalise(dependency))));
+  };
+  listed.forEach(add);
+  const imports = new Map();                                                   // a name a learner imports -> what provides it
+  for (const name of allowed) for (const imported of lock.packages[name].imports ?? []) imports.set(imported, { wheel: null, name });
+  for (const entry of wheels) for (const imported of entry.imports ?? [entry.name.replace(/-/g, "_")]) imports.set(imported.split(".")[0], { wheel: entry, name: entry.name });
+  host = {
+    install, lock, keys, wheels, wheelKeys, listed, allowed, imports,
+    offered: packages.map((entry) => typeof entry === "string" ? entry : entry.name),
+    importable: new Set(imports.keys()),
+    platformTag: `cp314-cp314-pyemscripten_${lock.info.abi_version}_wasm32`,
+    installedWheels: new Set(),
+    versions: {},                                                              // name -> version, for what the host's list has loaded
+  };
+  if (withFunground) host.importable.add("funground");
+}
+
+// The lock file Pyodide has already read (its packages and its info); fetched again from the Pyodide folder if this build does not expose it.
+async function readLock(pyodideUrl) {
+  const api = py._api;
+  if (api?.lockfile_packages && api?.lockfile_info) return { packages: api.lockfile_packages, info: api.lockfile_info };
+  const lock = await (await fetch(pyodideUrl + "pyodide-lock.json")).json();
+  return { packages: lock.packages, info: lock.info };
+}
+
+// The glue is told what the host offers, so that a failed import says it (explain_missing).
+function configureOffer() {
+  if (!host) return;
+  py.globals.get("set_offer")(py.toPy(host.offered), py.toPy([...host.importable]), withFunground);
+}
+
+// Everything listed, before `ready` (install: "at start"). The packages first, then the wheels, which may need them.
+async function loadHostAtStart(versions) {
+  if (!host) return;
+  if (host.install === "at start") {
+    await loadPyodidePackages(host.listed);
+    for (const entry of host.wheels) await installHostWheel(entry);
+  }
+  Object.assign(versions, host.versions);
+}
+
+// What these sources import, found by Pyodide's own find_imports (it reads the code and runs none): the listed packages and wheels
+// among them are loaded now (install: "on import"). Anything else is left alone, and nothing is fetched for it.
+async function loadForSources(sources) {
+  if (!host || host.install !== "on import") return;
+  const finder = py.pyimport("pyodide.code");
+  const wanted = new Set();
+  try {
+    for (const source of sources) {
+      const found = finder.find_imports(source);
+      for (const name of found.toJs()) wanted.add(name.split(".")[0]);
+      found.destroy();
+    }
+  } finally {
+    finder.destroy();
+  }
+  const packages = new Set(), wheels = new Set();
+  for (const name of wanted) {
+    const provider = host.imports.get(name);
+    if (!provider) continue;
+    if (provider.wheel) wheels.add(provider.wheel);
+    else packages.add(provider.name);
+  }
+  await loadPyodidePackages([...packages]);
+  for (const entry of wheels) await installHostWheel(entry);
+}
+
+// loadPackage does not throw when the browser cannot fetch a file (spike S-276, finding 4.3): it prints to stderr and carries on. So
+// afterwards each package asked for, and each it depends on, is looked for among the loaded ones, and the run fails naming those missing.
+async function loadPyodidePackages(names) {
+  const wanted = names.filter((name) => !(name in py.loadedPackages));
+  if (!wanted.length) return;
+  await py.loadPackage(wanted, { messageCallback: console.log, errorCallback: console.error });   // not the learner's output
+  const everything = new Set();
+  const add = (name) => {
+    if (everything.has(name)) return;
+    everything.add(name);
+    (host.lock.packages[name].depends ?? []).forEach((dependency) => host.keys.has(normalise(dependency)) && add(host.keys.get(normalise(dependency))));
+  };
+  wanted.forEach(add);
+  const missing = [...everything].filter((name) => !(name in py.loadedPackages));
+  if (missing.length) throw new Error(`${missing.join(", ")} could not be loaded (the browser could not fetch it).`);
+  for (const name of everything) host.versions[name] = host.lock.packages[name].version;           // with what they brought
+}
+
+const hex = (buffer) => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
+// A host wheel: refused unless its tag is one this Python takes, its SHA-256 is the one the host listed, and every requirement it names
+// is offered; then unpacked into site-packages, and the Pyodide packages and wheels it needs are loaded. Each refusal is one sentence
+// that says the wheel was not installed.
+async function installHostWheel(entry) {
+  if (host.installedWheels.has(entry)) return;
+  const file = decodeURIComponent(entry.url.split(/[?#]/)[0].split("/").pop());
+  const refuse = (why) => new Error(`Refused ${file}: ${why} It was not installed.`);
+  const tag = file.replace(/\.whl$/, "").split("-").slice(-3).join("-");
+  const taken = ["py3-none-any", "py2.py3-none-any", host.platformTag];
+  if (!file.endsWith(".whl")) throw refuse("it is not a .whl file.");
+  if (!taken.includes(tag)) throw refuse(`its tag is ${tag}, and this page takes only ${taken.join(", ")}.`);
+  let bytes;
+  try {
+    const response = await fetch(entry.url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    throw new Error(`${file} could not be fetched (${error.message === "Failed to fetch" ? "the browser could not reach it" : error.message}). It was not installed.`);
+  }
+  if (!globalThis.crypto?.subtle) throw refuse("this page cannot check its SHA-256 (the browser offers that only on https pages and on localhost).");
+  const actual = hex(await crypto.subtle.digest("SHA-256", bytes));
+  if (actual !== entry.sha256) throw refuse(`its SHA-256 is ${actual}, the host listed ${entry.sha256}.`);
+  let metadata;
+  try {
+    metadata = JSON.parse(py.globals.get("read_wheel_metadata")(bytes));
+  } catch (error) {
+    throw refuse(`it has no readable METADATA (${String(error.message ?? error).trim().split("\n").pop()}).`);
+  }
+  const offeredKeys = new Set([...host.allowed].map(normalise).concat([...host.wheelKeys], withFunground ? ["funground"] : []));
+  const absent = metadata.requires.filter((name) => !offeredKeys.has(normalise(name)));
+  if (absent.length) {
+    const list = absent.length === 1 ? absent[0] : `${absent.slice(0, -1).join(", ")} and ${absent[absent.length - 1]}`;
+    throw new Error(`${entry.name} needs ${list}, which this page does not offer. Add ${absent.length === 1 ? "it" : "them"} to packages.`);
+  }
+  host.installedWheels.add(entry);                                             // before its requirements: two wheels may need each other
+  await loadPyodidePackages(metadata.requires.map((name) => host.keys.get(normalise(name))).filter((name) => name && host.allowed.has(name)));
+  for (const required of host.wheels) {
+    if (required !== entry && metadata.requires.some((name) => normalise(name) === normalise(required.name))) await installHostWheel(required);
+  }
+  py.unpackArchive(bytes, "wheel", { extractDir: py.runPython("import site\nsite.getsitepackages()[0]") });
+  py.runPython("import importlib\nimportlib.invalidate_caches()");
+  host.versions[entry.name] = metadata.version;
+}
+
 // Python side of the worker: a few small functions, kept here so that this file is the whole worker.
 const PYTHON_GLUE = `
 import contextlib
 import importlib
+import importlib.util
 import io
 import json
 import linecache
 import os
+import re
 import shutil
 import sys
 import tempfile
 import traceback
+import zipfile
 from array import array
+from email.parser import Parser
 
 sys.dont_write_bytecode = True          # a helper edited and run again is always read from its source
 run_folder = None
 
 import builtins
 _builtin_input = builtins.input
+
+offer = None                            # S-276: what the host offers ({names, importable, funground}); None when it gave no list
+
+def set_offer(names, importable, with_funground):
+    """S-276: the host's list, so that explain_missing can say what the page offers. Names are in the host's order."""
+    global offer
+    offer = {"names": list(names), "importable": set(importable), "funground": with_funground}
+
+def explain_missing(error):
+    """S-276: an import of something the host did not list gives one plain sentence in place of "No module named 'pandas'". The
+    exception keeps its traceback, so the learner's own line is the one shown. Left alone: any module Python can find (its own
+    library, a file in the run folder, an installed package), a name the host offers (a dynamic import before its package was loaded),
+    and every error that is not a ModuleNotFoundError. The error is exact where a search of the source would not be: an import inside a
+    function or a string is not a mistake until it runs. In a runner without funground its name keeps S-274's sentence."""
+    if offer is None or not isinstance(error, ModuleNotFoundError) or not error.name:
+        return
+    top = error.name.split(".")[0]
+    if top in offer["importable"] or top in sys.modules:
+        return
+    try:
+        if importlib.util.find_spec(top) is not None:
+            return
+    except (ImportError, ValueError, AttributeError):
+        return
+    if top == "funground" and not offer["funground"]:
+        message = 'This runner was started without funground, so "import funground" cannot work here.'
+    else:
+        names = offer["names"]
+        message = f"This page does not offer {top}. " + (f"It offers: {', '.join(names)}." if names else "It offers Python's own library only.")
+    error.msg = message
+    error.args = (message,)
+    error._PYODIDE_ADDED_NOTE = True       # Pyodide adds a note when the error reaches JavaScript, telling the learner to call micropip or
+                                           # loadPackage; this page does not offer that, and the flag is what makes Pyodide skip the note
+
+def guarded(function, *args):
+    """S-276: call a Session method; a ModuleNotFoundError it raises goes up explained (explain_missing)."""
+    try:
+        return function(*args)
+    except ModuleNotFoundError as error:
+        explain_missing(error)
+        raise
+
+def session_start(session, source, filename):
+    return guarded(session.start, source, filename)
+
+def session_step(session, now):
+    return guarded(session.step, now)
+
+def read_wheel_metadata(data):
+    """S-276: a wheel's version and the names it requires, from its *.dist-info/METADATA (the wheel is read in memory, nothing is
+    unpacked). A requirement whose marker mentions "extra" is for an option nobody asked for and is skipped; every other requirement
+    counts, whatever its marker says: there is no evaluator for the rest, so this errs on the side of refusing. Returns JSON."""
+    with zipfile.ZipFile(io.BytesIO(data.to_bytes())) as wheel:
+        paths = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA") and name.count("/") == 1]
+        if not paths:
+            raise ValueError("no .dist-info/METADATA")
+        text = wheel.read(paths[0]).decode("utf-8", "replace")
+    fields = Parser().parsestr(text, headersonly=True)
+    requires = []
+    for line in fields.get_all("Requires-Dist") or []:
+        requirement, _, marker = line.partition(";")
+        if "extra" in marker:
+            continue
+        found = re.match(r"\\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
+        if found:
+            requires.append(found.group(1))
+    return json.dumps({"version": fields.get("Version", ""), "requires": requires})
 
 def use_input_lines(count):
     """S-272: with count lines given (setInputLines), input() raises one plain sentence when they run out instead of
@@ -438,6 +675,7 @@ def run_checks(source, filename, names, codes):
         except SystemExit:
             pass                                    # exit() ends a script; it is not a failure
         except Exception as raised:
+            explain_missing(raised)
             # From the learner's file down: the first frame is this function's, so it is left out (a SyntaxError has none below);
             # the runner's own frames (input() when the lines run out) are left out too, as fail() does for a run
             shown = traceback.TracebackException(type(raised), raised, raised.__traceback__.tb_next)
@@ -468,7 +706,8 @@ def run_plain(source, filename):
     A file that imports funground gets one plain sentence in place of ModuleNotFoundError's "No module named 'funground'". This
     catches the error and does not read the source: the error is exact (a source search would miss an import inside a function
     and would find one inside a string or a comment), it names the learner's own line, and it costs nothing when there is none.
-    The exception keeps its traceback, so that line is the one shown."""
+    The exception keeps its traceback, so that line is the one shown. S-276: the same for any import the host did not list
+    (explain_missing, which also holds the funground sentence)."""
     before = set(sys.modules)
     linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
     try:
@@ -477,9 +716,7 @@ def run_plain(source, filename):
     except SystemExit:
         pass                                        # exit() ends a script; it is not a failure
     except ModuleNotFoundError as error:
-        if error.name == "funground":
-            error.msg = 'This runner was started without funground, so "import funground" cannot work here.'
-            error.args = (error.msg,)
+        explain_missing(error)
         raise
     finally:
         forget_run_modules(before)
@@ -502,6 +739,11 @@ def check_real_libraries():
 
 // ---- a run
 
+// The learner's code to read for imports: the file, and the .py files passed beside it.
+function pythonSources(source, files) {
+  return [source, ...Object.entries(files ?? {}).filter(([name]) => name.endsWith(".py")).map(([, bytes]) => new TextDecoder().decode(bytes))];
+}
+
 // A new run folder with the files the page passed in: beside the sketch, "data/photo.jpg" and "helpers.py" (run and check).
 function startRunFolder(files) {
   py.globals.get("enter_run_folder")();                                    // a folder of its own: the file's files, saves and imports
@@ -519,8 +761,9 @@ async function run({ source, filename, width, height, scale, files, seed, stdin 
   startRunFolder(files);
   sendNewFiles({ record: true });                                          // what is there now is not the sketch's: only its later writes are sent,
                                                                            // a passed-in file too once the sketch rewrites it (a kept take.gif, S-221)
+  const sources = pythonSources(source, files);
+  await loadForSources(sources);                                           // the host's packages the code imports (S-276)
   if (!withFunground) return plainRun({ source, filename, width, height });
-  const sources = [source, ...Object.entries(files ?? {}).filter(([name]) => name.endsWith(".py")).map(([, bytes]) => new TextDecoder().decode(bytes))];
   const needed = neededFor(sources);
   await py.loadPackage(needed.packages, { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
   await installWheels(needed.wheels);
@@ -529,7 +772,8 @@ async function run({ source, filename, width, height, scale, files, seed, stdin 
                     fonts.fetchFont, py.toPy(fonts.checks), fetchUrl, postModelsRequest);
   if (seed !== undefined) py.pyimport("funground").random_seed(seed);    // the Session's own sketch: a repeatable run (goldens)
   try {
-    session.start(source, filename);
+    if (host) py.globals.get("session_start")(session, source, filename);
+    else session.start(source, filename);
   } catch (error) {
     sendNewFiles();
     return fail(error);
@@ -559,7 +803,7 @@ function plainRun({ source, filename, width, height }) {
 // Check (S-273, D-141 a): the file runs as plain Python and then the tests do, all in run_checks (the glue). Nothing is streamed:
 // what the file prints comes back in the answer. A failure of the call itself (a bad `tests`, a bad `stdin`) is the answer's `error`.
 // A test that never ends cannot answer: the page ends the worker, as for a sketch stuck in `while True:`.
-function check({ source, filename = "main.py", stdin, files, tests }) {
+async function check({ source, filename = "main.py", stdin, files, tests }) {
   sketchFile = filename;
   let answer;
   try {
@@ -568,6 +812,7 @@ function check({ source, filename = "main.py", stdin, files, tests }) {
     }
     setInputLines(stdin);
     startRunFolder(files);
+    await loadForSources(pythonSources(source, files));                    // the host's packages the code imports (S-276)
     answer = JSON.parse(py.globals.get("run_checks")(source, filename, py.toPy(tests.map((test) => test.name)), py.toPy(tests.map((test) => test.code))));
   } catch (error) {
     answer = { tests: [], output: "", error: String(error.message ?? error) };
@@ -594,7 +839,7 @@ async function installWheels(roles) {
 function step({ now }) {
   let running = false;
   try {
-    running = session.step(now);
+    running = host ? py.globals.get("session_step")(session, now) : session.step(now);
   } catch (error) {
     fail(error);
   }

@@ -435,10 +435,135 @@ log('pyodide alone');
     ...results, checked, info: { versions: alone.info.versions, capabilities: alone.info.capabilities },
     resources: alone.info.resources.map((r) => ({ name: r.name, bytes: r.bytes })),
     default_resources: runner.info.resources.map((r) => ({ name: r.name, bytes: r.bytes })),
-    rejected: await Promise.all([["numpy"], "funground", ["funground", "numpy"]].map((packages) =>
-      createRunner({ canvas: document.createElement("canvas"), baseUrl: new URL("/runner/", location.href), packages }).then(() => "accepted", (e) => e.message))),
   };
   alone.stop();
+}
+
+log('packages');
+// ---- The host's packages (S-276): createRunner({packages, install}). Each runner is its own, with `reuse` so that one worker serves
+// the runs of a scenario, and is ended at the end (`dispose`: a script that never returns is stopped, and the runner ends its worker).
+// What the worker fetched is read from inside it (performance.getEntriesByType in the script), because a page cannot see a worker's requests.
+{
+  const base = new URL("/runner/", location.href);
+  const wheels = await (await fetch("/tests/out/wheels/index.json")).json();
+  const open = async (options) => {
+    const out = [];
+    let ended = null;
+    const created = await createRunner({ canvas: document.createElement("canvas"), baseUrl: base, reuse: true, prewarm: false, ...options,
+      output: (text, stream) => out.push({ stream, text }), onFinish: (reason) => { ended = reason; } });
+    const run = async (source, runOptions) => {
+      out.length = 0; ended = null;
+      const started = await created.run(source, { filename: "main.py", ...runOptions });
+      await until(() => ended !== null, 60000, "the script to end").catch(() => {});
+      await sleep(100);
+      return { started, ended, output: out.map((l) => l.text) };
+    };
+    const fetched = async () => {                                // the files this worker has fetched so far, from inside it
+      const answer = await run("import js\nprint(' '.join(r.name for r in js.performance.getEntriesByType('resource')))\n");
+      return (answer.output[0] ?? "").split(" ");
+    };
+    const dispose = async () => {
+      created.run("while True:\n    pass\n", { filename: "spin.py" });
+      await sleep(200);
+      await created.stop();                                      // the worker does not answer: the runner ends it (STOP_WAIT_MS)
+    };
+    return { runner: created, run, fetched, dispose, info: created.info };
+  };
+  const names = (resources) => resources.map((r) => r.name);
+  const result = {};
+  const rejection = (options) => createRunner({ canvas: document.createElement("canvas"), baseUrl: base, prewarm: false, ...options }).then(() => "accepted", (e) => e.message);
+
+  // numpy, on import
+  {
+    const r = await open({ packages: ["numpy"] });
+    const atReady = names(r.info.resources);
+    const script = "import numpy as np; print(int(np.arange(10).sum()), np.linalg.det(np.array([[2.0, 0.0], [0.0, 3.0]])).round(6))\n";
+    const numpy = await r.run(script);
+    const afterRun = await r.fetched();
+    const folder = await r.run("import helper\nprint(helper.VALUE)\nimport json, os, math\nprint('library ok')\n",
+      { files: { "helper.py": new TextEncoder().encode("VALUE = 3\n") } });
+    const outside = await r.run("print('before')\nimport pandas\nprint('after')\n");
+    const outsideDotted = await r.run("import sklearn.linear_model\n");
+    const afterOutside = await r.fetched();
+    const checked = await r.runner.check("import pandas\n", { tests: [{ name: "never", code: "assert True" }] });
+    const again = await r.run(script);
+    result.numpy = { info: { versions: r.info.versions }, atReady, numpy, afterRun, folder, outside, outsideDotted, afterOutside, checked, again };
+    await r.dispose();
+  }
+
+  // scikit-learn, at start
+  {
+    const r = await open({ packages: ["scikit-learn"], install: "at start" });
+    const atReady = names(r.info.resources);
+    const sklearn = await r.run("import numpy as np\nfrom sklearn.linear_model import LinearRegression\n\nx = np.arange(10).reshape(-1, 1)\ny = 2 * np.arange(10) + 1\n" +
+      "model = LinearRegression().fit(x, y)\nprint(round(float(model.coef_[0]), 6), round(float(model.intercept_), 6))\n");
+    const outside = await r.run("import pandas\n");
+    result.sklearn = { atReady, versions: r.info.versions, sklearn, outside, afterRun: await r.fetched() };
+    await r.dispose();
+  }
+
+  // an empty list: Python's own library only
+  {
+    const r = await open({ packages: [] });
+    result.empty = { outside: await r.run("import numpy\n"), library: await r.run("import json, math\nprint(math.floor(2.5))\n") };
+    await r.dispose();
+  }
+
+  // funground with numpy (the Session path)
+  {
+    let frames = 0;
+    const r = await open({ packages: ["funground", "numpy"], onFrame: (n) => { frames = n; } });
+    const sketch = await r.run("import funground as f\nimport numpy as np\nf.size(60, 40)\nf.background('teal')\nprint(int(np.arange(4).sum()))\nf.show()\n");
+    const drawn = frames;
+    const outside = await r.run("import funground as f\nimport pandas\nf.show()\n");
+    const loop = await r.run("import funground as f\nf.size(60, 40)\ndef draw():\n    import pandas\nf.run()\n");
+    result.session = { versions: Object.keys(r.info.versions), sketch, drawn, outside, loop };      // the loop's first step raises
+    await r.dispose();
+  }
+
+  // host wheels, on import
+  {
+    const listed = [
+      { name: "fgtest-good", url: `/tests/out/wheels/${wheels.good.file}`, sha256: wheels.good.sha256 },
+      { name: "fgtest-badsum", url: `/tests/out/wheels/${wheels.badsum.file}`, sha256: "0".repeat(64) },
+      { name: "fgtest-pandas", url: `/tests/out/wheels/${wheels.pandas.file}`, sha256: wheels.pandas.sha256 },
+      { name: "fgtest-numpy", url: `/tests/out/wheels/${wheels.numpy.file}`, sha256: wheels.numpy.sha256, imports: ["fgtest_numpy"] },
+      { name: "fgtest-tag", url: `/tests/out/wheels/${wheels.tag.file}`, sha256: wheels.tag.sha256 },
+      { name: "fgtest-two", url: `/tests/out/wheels/${wheels.two.file}`, sha256: wheels.two.sha256 },
+    ];
+    await post("/mark", "");
+    const r = await open({ packages: ["numpy", ...listed] });
+    const atReady = names(r.info.resources);
+    const requestedAtReady = (await (await fetch("/requests.json")).json()).filter((q) => q.includes("/wheels/"));
+    const good = await r.run("import fgtest_good\nprint(fgtest_good.hello('Ada'))\n");
+    const requestedAfter = (await (await fetch("/requests.json")).json()).filter((q) => q.includes("/wheels/"));
+    const badsum = await r.run("print('before')\nimport fgtest_badsum\nprint('after')\n");
+    const pandas = await r.run("import fgtest_pandas\n");
+    const withNumpy = await r.run("import fgtest_numpy\nprint(fgtest_numpy.total())\n");
+    const tag = await r.run("import fgtest_tag\n");
+    const two = await r.run("import fgtest_two\nprint(fgtest_two.both())\n");
+    const unrelated = await r.run("print('no wheel needed')\n");
+    const fetched = await r.fetched();
+    result.wheels = { atReady, requestedAtReady, requestedAfter, good, badsum, pandas, withNumpy, tag, two, unrelated, fetched, sha: { badsum: wheels.badsum.sha256, tag: wheels.tag.sha256 } };
+    await r.dispose();
+    // at start: a good wheel is installed before ready and its version is reported; a refused one fails createRunner
+    const start = await open({ packages: [listed[0]], install: "at start" });
+    result.wheels.start = { versions: start.info.versions, run: await start.run("import fgtest_good\nprint(fgtest_good.VERSION)\n"), fetched: await start.fetched() };
+    await start.dispose();
+    result.wheels.startBad = await rejection({ packages: [listed[1]], install: "at start" });
+    result.wheels.startTag = await rejection({ packages: [listed[4]], install: "at start" });
+  }
+
+  // options that cannot work
+  result.rejected = {
+    notList: await rejection({ packages: "funground" }),
+    notEntry: await rejection({ packages: [3] }),
+    noSha: await rejection({ packages: [{ name: "x", url: "x-1-py3-none-any.whl", sha256: "abc" }] }),
+    noName: await rejection({ packages: [{ url: "x-1-py3-none-any.whl", sha256: "0".repeat(64) }] }),
+    install: await rejection({ packages: [], install: "sometimes" }),
+    unknown: await rejection({ packages: ["numpy", "pandsa"] }),
+  };
+  report.scenarios.packages = result;
 }
 
 log('keep');
