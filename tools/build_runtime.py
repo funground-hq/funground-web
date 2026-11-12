@@ -10,6 +10,9 @@ Standard library only; nothing is installed. It writes, under runner/runtime/ (g
     wheels/        the three C-extension wheels (pycairo, uharfbuzz, skia-pathops) downloaded from the
                    funground-cairo-wasm release and checked against that release's SHA256SUMS.txt,
                    and the funground wheel built from the checkout given by --funground
+    wheels/svgelements-*.whl, wheels/pypdf-*.whl  funground's two pure-Python dependencies, at the exact versions and
+                   SHA-256 in DEPENDENCIES, role "dependency" (S-277): worker.js installs them from here, so a page never
+                   asks PyPI for them. An existing file with the right hash is kept, so a rebuild needs no network for them
     completions.json  the checkout's funground/completions.json (names, signatures, colours and option words), role
                    "completions": the VS Code extension's suggestions (S-205) are made from it, so they always match the
                    funground this runtime runs
@@ -53,6 +56,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 RELEASE = "https://github.com/funground-hq/funground-cairo-wasm/releases/download/v0.1.0-wasm/"
 C_WHEELS = ("pycairo", "uharfbuzz", "skia_pathops")            # name prefixes of the wheels in that release
+# funground's pure-Python dependencies (S-277): each wheel at one exact version, with the SHA-256 PyPI published for it, so a
+# file that differs is refused even if PyPI were to serve it. A new version is a change here, made on purpose.
+DEPENDENCIES = {
+    "svgelements-1.9.6-py2.py3-none-any.whl": "8a5cf2cc066d98e713d5b875b1d6e5eeb9b92e855e835ebd7caab2713ae1dcad",
+    "pypdf-6.20.0-py3-none-any.whl": "f003fc2014814d264fe7dd3f9d435c158e23e1a85a2233f87a0a2d6d21c914ad",
+}
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)                               # fixed, so the same source gives the same wheel
 FONT_SUFFIXES = (".ttf", ".otf", ".ttc")                       # the bundled fonts: left out of the wheel, served from fonts/
 FONT_URL_SUFFIX = ".bin"                                       # a neutral file type, not .ttf
@@ -104,6 +113,29 @@ def keep_c_wheels(out: Path, manifest: Path) -> list[Path]:
         target = out / name
         if not target.exists() or sha256(target.read_bytes()) != digest:
             raise SystemExit(f"{name} is missing or differs from manifest.json: build once without --offline")
+        found.append(target)
+    return found
+
+
+def dependency_wheels(out: Path, offline: bool) -> list[Path]:
+    """funground's pure-Python dependencies (DEPENDENCIES), each checked against its pinned SHA-256. An existing file with the
+    right hash is kept; otherwise PyPI says where the file is (its JSON API), and what comes back must match the pin."""
+    found = []
+    for name, digest in DEPENDENCIES.items():
+        target = out / name
+        if not (target.exists() and sha256(target.read_bytes()) == digest):
+            if offline:
+                raise SystemExit(f"{name} is missing or differs from DEPENDENCIES: build once without --offline")
+            project, version = name.split("-")[:2]
+            release = json.loads(fetch(f"https://pypi.org/pypi/{project}/{version}/json"))
+            url = next((f["url"] for f in release["urls"] if f["filename"] == name), None)
+            if url is None:
+                raise SystemExit(f"PyPI lists no {name} for {project} {version}")
+            print(f"downloading {name}")
+            target.write_bytes(fetch(url))
+        if sha256(target.read_bytes()) != digest:
+            target.unlink()
+            raise SystemExit(f"{name}: SHA-256 does not match DEPENDENCIES")
         found.append(target)
     return found
 
@@ -295,6 +327,7 @@ def main() -> None:
     ml = (args.ml or root / "ml").resolve()
 
     c_wheels = keep_c_wheels(wheels, out / "manifest.json") if args.offline else download_c_wheels(wheels)
+    dependencies = dependency_wheels(wheels, args.offline)
     fg_wheel = build_funground_wheel(root, wheels)
     ml_wheel = build_funground_wheel(ml, wheels, licences=("LICENSE",), licence_root=root)
     models_table = write_models_table(ml, out)
@@ -307,6 +340,7 @@ def main() -> None:
     shutil.copyfile(source, completions)
 
     files = [{"name": f"wheels/{w.name}", "role": "c-extension", "size": w.stat().st_size, "sha256": sha256(w.read_bytes())} for w in c_wheels]
+    files += [{"name": f"wheels/{w.name}", "role": "dependency", "size": w.stat().st_size, "sha256": sha256(w.read_bytes())} for w in dependencies]
     files.append({"name": f"wheels/{fg_wheel.name}", "role": "funground", "size": fg_wheel.stat().st_size, "sha256": sha256(fg_wheel.read_bytes())})
     files.append({"name": f"wheels/{ml_wheel.name}", "role": "funground-ml", "size": ml_wheel.stat().st_size, "sha256": sha256(ml_wheel.read_bytes())})
     files.append({"name": models_table.name, "role": "models", "size": models_table.stat().st_size, "sha256": sha256(models_table.read_bytes())})

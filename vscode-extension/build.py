@@ -7,8 +7,9 @@ Needs runner/runtime/ (tools/build_runtime.py). Standard library only; nothing i
     media/completions.json   funground's suggestions data, from runner/runtime/ (git-ignored): the extension reads it for
                              completion, hover and signature help (S-205)
     media/runner/            runner.js, worker.js, audio.js, camera.js, microphone-worklet.js, copied from ../runner (git-ignored)
-    media/runner/runtime/    with --runtime bundled (default): manifest.json and the wheels the worker installs, plus
-                             svgelements and pypdf (role "dependency"), so nothing is fetched from PyPI
+    media/runner/runtime/    with --runtime bundled (default): manifest.json and the wheels the worker installs, svgelements
+                             and pypdf among them (role "dependency", put there by tools/build_runtime.py since S-277), so
+                             nothing is fetched from PyPI
     media/runner/pyodide/    with --runtime bundled: the part of Pyodide the runner uses (core, standard library, and
                              micropip, fonttools, pygame-ce, Pillow), from --pyodide DIR (an unpacked Pyodide release) or
                              from jsDelivr
@@ -44,10 +45,6 @@ COMPLETIONS = "completions.json"                                             # i
 PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/"
 PYODIDE_CORE = ("pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json")
 PYODIDE_PACKAGES = ("micropip", "fonttools", "pygame-ce", "pillow")        # worker.js: PYODIDE_PACKAGES and ON_DEMAND
-DEPENDENCIES = {                                                             # funground's pure-Python dependencies, from PyPI
-    "svgelements": "1.9.6",
-    "pypdf": "6.20.0",
-}
 
 
 def sha256(data: bytes) -> str:
@@ -82,9 +79,11 @@ def copy_pyodide(out: Path, source: Path | None) -> list[str]:
 
 
 def copy_runtime(out: Path) -> None:
-    """runner/runtime's manifest and wheels, plus the pure-Python dependencies (role "dependency") from PyPI."""
+    """runner/runtime's manifest and every file it lists, the pure-Python dependencies (role "dependency") among them."""
     source = REPO / "runner" / "runtime"
     manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+    if not any(entry["role"] == "dependency" for entry in manifest["files"]):
+        raise SystemExit("runner/runtime/manifest.json lists no svgelements or pypdf: it is older than S-277, run tools/build_runtime.py")
     (out / "wheels").mkdir(parents=True, exist_ok=True)
     for entry in manifest["files"]:
         data = (source / entry["name"]).read_bytes()
@@ -93,16 +92,6 @@ def copy_runtime(out: Path) -> None:
         target = out / entry["name"]
         target.parent.mkdir(parents=True, exist_ok=True)       # entries may sit in folders (wheels/, fonts/)
         target.write_bytes(data)
-    for name, version in DEPENDENCIES.items():
-        release = json.loads(fetch(f"https://pypi.org/pypi/{name}/{version}/json"))
-        wheel = next(f for f in release["urls"] if f["packagetype"] == "bdist_wheel" and f["filename"].endswith("-none-any.whl"))
-        target = out / "wheels" / wheel["filename"]
-        if not (target.exists() and sha256(target.read_bytes()) == wheel["digests"]["sha256"]):
-            target.write_bytes(fetch(wheel["url"]))
-        data = target.read_bytes()
-        if sha256(data) != wheel["digests"]["sha256"]:
-            raise SystemExit(f"{wheel['filename']}: SHA-256 does not match PyPI")
-        manifest["files"].append({"name": f"wheels/{wheel['filename']}", "role": "dependency", "size": len(data), "sha256": sha256(data)})
     manifest.pop("examples", None)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
 

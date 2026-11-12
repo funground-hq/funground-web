@@ -205,8 +205,9 @@ header, so the site copies these at build time.
 
 It downloads the three C-extension wheels from the `funground-cairo-wasm` release (checked against its
 `SHA256SUMS.txt`), builds the funground wheel from the checkout, copies the examples, and writes `manifest.json`.
-Pyodide itself comes from jsDelivr; `fonttools` from the Pyodide distribution; `svgelements` and `pypdf` from PyPI
-through micropip. `pygame-ce` and `pillow` (Pyodide distribution) are loaded only for a sketch that calls a picture
+It also puts funground's two pure-Python dependencies, `svgelements` and `pypdf`, in `wheels/` with role `dependency`,
+at the exact versions and SHA-256 pinned in `DEPENDENCIES` (S-277), so a page never asks PyPI for them. Pyodide itself
+comes from jsDelivr, and `fonttools` from the Pyodide distribution. `pygame-ce` and `pillow` (Pyodide distribution) are loaded only for a sketch that calls a picture
 function (`ON_DEMAND` in `worker.js`; `tools/check_on_demand.py` keeps that list complete). Sound does not need them. Pillow alone
 is loaded for `save_gif(` or a `.gif` in the source.
 The bundled fonts (`funground/fonts/*.ttf`, 2.4 MB of the wheel) are not in the funground wheel (S-211): they are copied to
