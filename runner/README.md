@@ -49,6 +49,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 | `pyodideUrl` | jsDelivr (in `worker.js`) | The folder Pyodide loads from. |
 | `onnxruntimeUrl` (S-232) | jsDelivr, one exact version (in `worker.js`) | The folder `onnxruntime-web` loads from, for `ml.pose()` and `ml.hand()`. It must hold `ort.wasm.mjs` and the `.wasm` file beside it. |
 | `runtimeUrl` | `runtime/` under `baseUrl` | The folder holding `manifest.json` and the wheels. A manifest entry with role `dependency` is installed from there instead of PyPI. |
+| `packages` (S-274) | left out | What is loaded besides Python. Left out or `["funground"]`: funground and its libraries, as always. `[]`: Pyodide alone, and `run()` runs plain Python. Anything else makes `createRunner` reject. See "What gets loaded" below. |
 | `reuse` (D-083) | `false` | Run the next sketch in the same worker (the same Python) when the last one has ended, or stops when asked: a re-run takes about 0.1 s instead of loading Python again. funground's `Session` starts each sketch afresh. A sketch that does not stop within a second (`while True:`, or a long `setup()`) still has its worker ended, and a new Python loads (seconds). |
 | `onRestart` | none | With `reuse`: called when that happens, so the page can say why the next run waits. |
 | `spare` | `false` | While a sketch runs, keep the next run's worker loaded too, so that a re-run starts at once. Costs a second Python's memory. Not needed with `reuse`. |
@@ -217,6 +218,34 @@ including one that compresses fonts (GitHub Pages does). A font whose bytes diff
 It also builds `funground_ml-*.whl` from the checkout's `ml/` folder (S-232; `--ml` names another) and writes `models.json`.
 `build_runtime.py --offline` rebuilds the funground wheel and the examples without downloading, keeping the
 C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`).
+
+## What gets loaded (S-274)
+
+`createRunner({packages})` says what the worker loads besides Python (D-140 a, D-144 e):
+
+| `packages` | What is fetched | What `run()` does |
+|---|---|---|
+| left out | Pyodide, `micropip`, `fonttools`, `manifest.json`, the three C-extension wheels, `svgelements`, `pypdf` and the funground wheel | funground's `Session` runs the file |
+| `["funground"]` | the same as left out, the same files | the same |
+| `[]` | Pyodide alone: nothing from `runtime/`, no `micropip`, no wheels, no fonts | the file runs as a plain Python script |
+
+- A host that says nothing gets exactly the start it always had. Play and the VS Code panel do not change.
+- Anything else (another name, or not a list) makes `createRunner` reject with one sentence: `packages can only be [] or ["funground"]
+  in this runner; other packages come later (S-276)`. S-276 widens the same list to Pyodide packages and a host's own wheels.
+- **funground is implicit wherever it is loaded.** It is always installed at start, never when a file imports it: the source cannot say
+  for sure whether a file needs it (a file that defines `draw()` and never calls `run()` still runs as a sketch, D-088). When it is loaded, every script and sketch goes through its `Session`,
+  with or without `import funground`. There is no plain-script path in a runner that has funground (`check()` is the one exception, S-273).
+- **S-271 measured the difference** on a cold load: Pyodide alone transfers 6.24 MB and is ready in 4.3 s, against 10.34 MB and 7.3 s
+  for the full start.
+- **Pyodide alone.** `run(source, {filename, files, stdin})` writes the files to a new run folder and runs `source` as `python filename`
+  would. `print()` is streamed to `output` as in a funground script, an uncaught error is trimmed to the learner's file and line, and
+  `started` answers `{ok: true, width, height}` with the size `run()` was given. The run ends then (`onFinish("ended")`, or
+  `"error"`), as a script that has finished drawing does. There is no canvas, no frame, no sound, and none of the on-demand packages.
+  `check()` and `stop()` work as before.
+- A file that imports funground there gets one plain error from its own line, instead of `No module named 'funground'`:
+  `ModuleNotFoundError: This runner was started without funground, so "import funground" cannot work here.`
+- `runner.info.versions` holds `python` and `pyodide` (a full runner lists its libraries too). `runner.info.fonts` is `"none"`.
+  `runner.info.capabilities` is the same list.
 
 ## Models (S-232)
 

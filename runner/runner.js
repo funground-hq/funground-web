@@ -40,6 +40,9 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  * @param {string | URL} [options.onnxruntimeUrl]  the folder onnxruntime-web loads from, for ml.pose() and ml.hand() (default: jsDelivr at one
  *   exact version, in worker.js). It holds ort.wasm.mjs and the .wasm file beside it
  * @param {string | URL} [options.runtimeUrl]  the folder holding manifest.json and the wheels (default: runtime/ under baseUrl)
+ * @param {string[]} [options.packages]  what the worker loads besides Pyodide (S-274): left out or `["funground"]` is the full start
+ *   (funground and its libraries, about 10 MB cold); `[]` is Pyodide alone (about 6 MB), and `run()` then runs a plain Python script. In this
+ *   runner nothing else is accepted: more packages come with S-276. funground is implicit: it is always installed at start, never on import
  * @param {boolean} [options.spare]  while a sketch runs, keep the next run's worker loaded too, so that a re-run (an editor
  *   re-running on every edit) starts at once instead of waiting for Python to load; costs a second Python's memory (default false)
  * @param {boolean} [options.reuse]  run the next sketch in the same worker when the last one has ended or stops when asked
@@ -52,7 +55,11 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
  * @returns {Promise<{info: object, run: Function, check: Function, stop: Function, keep: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
+  // S-274, D-144 e: [] (Pyodide alone) and ["funground"] are the two starts this runner has. Checked first, before anything is made.
+  if (packages !== undefined && !(Array.isArray(packages) && (packages.length === 0 || (packages.length === 1 && packages[0] === "funground")))) {
+    throw new Error('createRunner(): packages can only be [] or ["funground"] in this runner; other packages come later (S-276)');
+  }
   const write = outputWriter(output);
   const context = canvas.getContext("2d");
   const audio = createAudio({
@@ -103,7 +110,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       };
     });
     slot.ready.catch(() => {});                                    // reported where it is awaited
-    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts });
+    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts, packages });
     console.debug("runner: worker started");
     return slot;
   }

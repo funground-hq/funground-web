@@ -278,6 +278,47 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
         after = check["after"]
         checks["check: a normal run() after a check behaves as before"] = (
             after["ok"] is True and after["ended"] == "ended" and after["output"] == ["after a check"])
+    alone = scenarios.get("pyodide_alone")
+    if alone:
+        names = lambda resources: [r["name"] for r in resources]
+        texts = lambda run: [line["text"] for line in run["output"]]
+        seen = names(alone["resources"])
+        wheels = ("funground-", "pycairo-", "uharfbuzz-", "skia_pathops-")
+        checks["run: Pyodide alone (packages: []) fetches Python itself and no funground wheel, no C-extension wheel, no manifest.json and no font"] = (
+            any(n.endswith("pyodide.asm.wasm") for n in seen)
+            and not any("/runtime/" in n or "manifest.json" in n or "/wheels/" in n or "/fonts/" in n or any(w in n for w in wheels) for n in seen))
+        checks["run: Pyodide alone reports its Python and Pyodide versions, and the same capabilities"] = (
+            set(alone["info"]["versions"]) == {"python", "pyodide"} and alone["info"]["versions"]["python"].startswith("3.14")
+            and alone["info"]["capabilities"] == ["run", "stop", "stdin", "check"])
+        plain = alone["plain"]
+        checks["run: Pyodide alone runs a plain script that prints, reads input lines and its files, and the run ends with the size it was given"] = (
+            texts(plain) == ["Name? ", "Hello, Ada", "from a file", "no newline"] and plain["ended"] == "ended"
+            and plain["started"] == {"ok": True, "width": 321, "height": 123})
+        raises = texts(alone["raises"])
+        checks["run: Pyodide alone trims an error to the learner's file and line"] = (
+            alone["raises"]["ended"] == "error" and raises[0] == "start" and len(raises) == 2
+            and raises[1].startswith('Traceback (most recent call last):\n  File "main.py", line 3')
+            and "ZeroDivisionError" in raises[1] and "<runner>" not in raises[1] and "<exec>" not in raises[1])
+        said = 'ModuleNotFoundError: This runner was started without funground, so "import funground" cannot work here.'
+        imports, from_import = texts(alone["imports"]), texts(alone["fromImport"])
+        checks["run: Pyodide alone gives a plain sentence for import funground, with the learner's file and line, and the file stops there"] = (
+            alone["imports"]["ended"] == "error" and imports[0] == "before" and len(imports) == 2 and said in imports[1]
+            and 'File "main.py", line 2' in imports[1] and "No module named" not in imports[1] and "<runner>" not in imports[1])
+        checks["run: Pyodide alone gives the same sentence for from funground import"] = (
+            alone["fromImport"]["ended"] == "error" and len(from_import) == 1 and said in from_import[0]
+            and 'File "main.py", line 1' in from_import[0])
+        checks["run: Pyodide alone runs the next file in the same worker after an error"] = (
+            texts(alone["after"]) == ["still works"] and alone["after"]["ended"] == "ended")
+        answer = {t["name"]: t for t in alone["checked"]["tests"]}
+        checks["run: check() answers in Pyodide alone as in a full runner"] = (
+            alone["checked"]["error"] is None and alone["checked"]["output"] == "6\n" and answer["six"] == {"name": "six", "passed": True, "message": ""}
+            and answer["wrong"] == {"name": "wrong", "passed": False, "message": "no"})
+        checks["run: createRunner rejects packages other than [] or [\"funground\"] with one plain sentence"] = all(
+            reason.startswith("createRunner(): packages can only be [] or [\"funground\"]") and "S-276" in reason for reason in alone["rejected"])
+        default = names(alone["default_resources"])
+        checks["run: the default runner still fetches manifest.json, the funground wheel and the three C-extension wheels"] = (
+            any(n.endswith("/runtime/manifest.json") for n in default)
+            and all(any(f"/wheels/{w}" in n for n in default) for w in wheels))
     errors = scenarios.get("errors")
     if errors:
         said = [line["text"] for line in errors["output"]]

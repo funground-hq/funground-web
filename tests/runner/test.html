@@ -403,6 +403,44 @@ log('checks');
   runner.stop();
 }
 
+log('pyodide alone');
+// ---- Pyodide alone (S-274): a runner made with packages: [] loads Python and nothing else, and runs a file as a plain script. Its
+// own runner, as for the checks. The resources are the names the worker fetched (runner.info.resources); the default runner's, above,
+// are recorded beside them to show that today's start is unchanged.
+{
+  const out = [];
+  let ended = null;
+  const alone = await createRunner({
+    canvas: document.createElement("canvas"), baseUrl: new URL("/runner/", location.href), reuse: true, packages: [],
+    output: (text, stream) => out.push({ stream, text }), onFinish: (reason) => { ended = reason; },
+  });
+  const runScript = async (source, options) => {
+    out.length = 0; ended = null;
+    const started = await alone.run(source, { filename: "main.py", ...options });
+    await until(() => ended !== null, 30000, "the script to end").catch(() => {});
+    await sleep(100);
+    return { started, ended, output: out.map((l) => ({ ...l })) };
+  };
+  const files = { "data/words.txt": new TextEncoder().encode("from a file\n") };
+  const results = {
+    plain: await runScript('name = input("Name? ")\nprint("Hello,", name)\nprint(open("data/words.txt").read().strip())\nprint("no newline", end="")\n',
+      { stdin: ["Ada"], files, width: 321, height: 123 }),
+    raises: await runScript("print('start')\nx = 1\nprint(x / 0)\n"),
+    imports: await runScript("print('before')\nimport funground\nprint('after')\n"),
+    fromImport: await runScript("from funground import circle\n"),
+    after: await runScript("print('still works')\n"),
+  };
+  const checked = await alone.check("print(2 * 3)\n", { tests: [{ name: "six", code: 'assert output == "6\\n"' }, { name: "wrong", code: "assert False, 'no'" }] });
+  report.scenarios.pyodide_alone = {
+    ...results, checked, info: { versions: alone.info.versions, capabilities: alone.info.capabilities },
+    resources: alone.info.resources.map((r) => ({ name: r.name, bytes: r.bytes })),
+    default_resources: runner.info.resources.map((r) => ({ name: r.name, bytes: r.bytes })),
+    rejected: await Promise.all([["numpy"], "funground", ["funground", "numpy"]].map((packages) =>
+      createRunner({ canvas: document.createElement("canvas"), baseUrl: new URL("/runner/", location.href), packages }).then(() => "accepted", (e) => e.message))),
+  };
+  alone.stop();
+}
+
 log('keep');
 // ---- Keep (S-226): runner.keep(note) runs f.keep(note); studio/001.png, .py and .json each reach onFile once
 // Its own runner, made as Play's preview makes it (reuse: true): then a script that has ended keeps its Python and can still be kept.
