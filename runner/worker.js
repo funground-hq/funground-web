@@ -17,6 +17,9 @@
 //     camera-unavailable {reason}           the page could not open the camera; funground prints one line with the reason
 //     keep   {id, note}                     run funground's f.keep(note) for the run (S-226): studio/NNN.png, .py and .json in the
 //                                           run's folder, written before the answer; answers `kept`
+//     check  {source, filename, stdin?, files, tests}   run the file as plain Python, then each test (S-273, D-141 a); answers
+//                                           `checked`. `tests` is a list of {name, code}; `code` is Python that sees the file's
+//                                           names, `output` (what the file printed) and `source`. Not a sketch: no Session
 //     stop                                  end the run (the sketch's finish() runs), so the worker can run another file;
 //                                           answers `stopped`. Used by runner.js's `reuse` option (D-083)
 //
@@ -34,6 +37,9 @@
 //     microphone {command}                      "start", "stop" or "close": the sketch wants the microphone listened to or let go
 //     camera   {command, fields}                "start" {width, height}, "stop" or "close": the sketch wants camera frames at that
 //                                               size, or lets the camera go (camera.js)
+//     checked  {tests, output, error}           the answer to `check`: `tests` is [{name, passed, message}] in order (message is ""
+//                                           when passed); `output` is what the file printed; `error` is the file's traceback
+//                                           (then `tests` is []) or null
 //     stopped  {}                               the run asked to stop has ended; the worker is ready for another `run`
 //     (the models worker, models-worker.js, is started by this worker, not by the page: see Models below)
 //     kept     {id, ok, base?, files?, reason?}  the answer to `keep`: `files` names the files it wrote (each also sent as a
@@ -75,7 +81,7 @@ const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 // What this runner can do, as words a host can look for in `ready` before it sends work (S-275, D-142 a). A word is added
 // by the story that ships it and never removed within a version line; tools/test_runner.py fails unless every word has
 // passing checks named after it ("stdin: ...").
-const CAPABILITIES = ["run", "stop", "stdin"];
+const CAPABILITIES = ["run", "stop", "stdin", "check"];
 
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
 // onnxruntime-web, from jsDelivr at one exact version (the newest that was at least two weeks old when it was pinned: S-232, 2 November 2026).
@@ -274,11 +280,16 @@ await micropip.install(funground_wheel, deps=False)
 
 // Python side of the worker: a few small functions, kept here so that this file is the whole worker.
 const PYTHON_GLUE = `
+import contextlib
 import importlib
+import io
+import json
+import linecache
 import os
 import shutil
 import sys
 import tempfile
+import traceback
 from array import array
 
 sys.dont_write_bytecode = True          # a helper edited and run again is always read from its source
@@ -358,6 +369,69 @@ def push_models_sound(session, task, key, scores):
     """Hand the sound model's 521 scores (a Float32Array) from the page to the session, as float32 bytes."""
     session.push_models_sound(task, key, scores.to_bytes())
 
+def _bare_assert_sentence(error, label, code):
+    """A failed assert with no message: name the test's own line that failed (the innermost frame in the test's code)."""
+    line = ""
+    frame = error.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename == label:
+            lines = code.splitlines()
+            line = lines[frame.tb_lineno - 1].strip() if 0 < frame.tb_lineno <= len(lines) else ""
+        frame = frame.tb_next
+    return f"This check failed: {line}" if line else "This check failed."
+
+def _run_one_check(name, code, namespace, output, source):
+    """One test (S-273). It gets a shallow copy of the learner's names plus output and source, so a name it sets is not
+    seen by the next test (a list it changes in place is: this is not a sandbox). What it prints is thrown away."""
+    scope = dict(namespace)
+    scope["output"] = output
+    scope["source"] = source
+    label = f"<check: {name}>"
+    sink = io.StringIO()
+    try:
+        compiled = compile(code, label, "exec")
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            exec(compiled, scope)
+    except AssertionError as error:
+        return {"name": name, "passed": False, "message": str(error) or _bare_assert_sentence(error, label, code)}
+    except (Exception, SystemExit) as error:
+        detail = f": {error}" if str(error) else ""
+        return {"name": name, "passed": False, "message": f"The check raised {type(error).__name__}{detail}"}
+    return {"name": name, "passed": True, "message": ""}
+
+def run_checks(source, filename, names, codes):
+    """S-273: run the learner's source as a plain script (not funground's Session) and capture what it prints; then, if it
+    did not raise, each test in order. Returns JSON: {tests, output, error}. The learner's source is put in linecache so
+    that a traceback shows its lines with the ^ markers, as CPython does."""
+    before = set(sys.modules)
+    printed = io.StringIO()
+    namespace = {"__name__": "__main__", "__file__": filename}
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    error = None
+    results = []
+    try:
+        try:
+            compiled = compile(source, filename, "exec")
+            with contextlib.redirect_stdout(printed):
+                exec(compiled, namespace)
+        except SystemExit:
+            pass                                    # exit() ends a script; it is not a failure
+        except Exception as raised:
+            # From the learner's file down: the first frame is this function's, so it is left out (a SyntaxError has none below);
+            # the runner's own frames (input() when the lines run out) are left out too, as fail() does for a run
+            shown = traceback.TracebackException(type(raised), raised, raised.__traceback__.tb_next)
+            shown.stack = traceback.StackSummary.from_list([frame for frame in shown.stack if frame.filename != "<runner>"])
+            error = "".join(shown.format()).rstrip()
+        if error is None:
+            output = printed.getvalue()
+            results = [_run_one_check(name, code, namespace, output, source) for name, code in zip(names, codes)]
+    finally:
+        for name in set(sys.modules) - before:      # helpers the file imported are forgotten, as a run's are
+            path = getattr(sys.modules[name], "__file__", None) or ""
+            if run_folder and path.startswith(run_folder):
+                del sys.modules[name]
+    return json.dumps({"tests": results, "output": printed.getvalue(), "error": error})
+
 def check_real_libraries():
     """Nothing is stubbed: the three C libraries are compiled extension modules (.so), and funground imports them."""
     versions = {}
@@ -376,16 +450,21 @@ def check_real_libraries():
 
 // ---- a run
 
-async function run({ source, filename, width, height, scale, files, seed, stdin }) {
-  sketchFile = filename;
-  setInputLines(stdin);                                                    // this run's lines, or none (a reused worker forgets the last run's)
+// A new run folder with the files the page passed in: beside the sketch, "data/photo.jpg" and "helpers.py" (run and check).
+function startRunFolder(files) {
   py.globals.get("enter_run_folder")();                                    // a folder of its own: the file's files, saves and imports
-  known = new Map();
-  for (const [name, bytes] of Object.entries(files ?? {})) {               // beside the sketch: "data/photo.jpg", "helpers.py"
+  for (const [name, bytes] of Object.entries(files ?? {})) {
     const folder = name.split("/").slice(0, -1).join("/");
     if (folder) py.FS.mkdirTree(folder);
     py.FS.writeFile(name, new Uint8Array(bytes));
   }
+}
+
+async function run({ source, filename, width, height, scale, files, seed, stdin }) {
+  sketchFile = filename;
+  setInputLines(stdin);                                                    // this run's lines, or none (a reused worker forgets the last run's)
+  known = new Map();
+  startRunFolder(files);
   sendNewFiles({ record: true });                                          // what is there now is not the sketch's: only its later writes are sent,
                                                                            // a passed-in file too once the sketch rewrites it (a kept take.gif, S-221)
   const sources = [source, ...Object.entries(files ?? {}).filter(([name]) => name.endsWith(".py")).map(([, bytes]) => new TextDecoder().decode(bytes))];
@@ -406,6 +485,26 @@ async function run({ source, filename, width, height, scale, files, seed, stdin 
   if (!session.running) flushOutput();                                     // a script has ended: its last line, even without a newline
   const [canvasWidth, canvasHeight] = session.canvas_size.toJs();
   post({ type: "started", width: canvasWidth, height: canvasHeight, running: session.running });
+}
+
+// Check (S-273, D-141 a): the file runs as plain Python and then the tests do, all in run_checks (the glue). Nothing is streamed:
+// what the file prints comes back in the answer. A failure of the call itself (a bad `tests`, a bad `stdin`) is the answer's `error`.
+// A test that never ends cannot answer: the page ends the worker, as for a sketch stuck in `while True:`.
+function check({ source, filename = "main.py", stdin, files, tests }) {
+  sketchFile = filename;
+  let answer;
+  try {
+    if (!Array.isArray(tests) || tests.some((test) => typeof test?.name !== "string" || typeof test?.code !== "string")) {
+      throw new Error("check(): tests must be a list of {name, code}, both strings");
+    }
+    setInputLines(stdin);
+    startRunFolder(files);
+    answer = JSON.parse(py.globals.get("run_checks")(source, filename, py.toPy(tests.map((test) => test.name)), py.toPy(tests.map((test) => test.code))));
+  } catch (error) {
+    answer = { tests: [], output: "", error: String(error.message ?? error) };
+  }
+  try { flushOutput(); } catch { /* Python itself is broken: the answer says why */ }
+  post({ type: "checked", ...answer });
 }
 
 // Wheels of our own that a sketch needs (ON_DEMAND), by their role in the manifest, without their dependencies: funground-ml asks
@@ -625,7 +724,7 @@ function stop() {
   }
 }
 
-const handlers = { init, run, step, event, microphone, camera, "camera-unavailable": cameraUnavailable, keep, stop };
+const handlers = { init, run, check, step, event, microphone, camera, "camera-unavailable": cameraUnavailable, keep, stop };
 
 self.onmessage = async (e) => {
   try {

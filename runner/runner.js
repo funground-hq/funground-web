@@ -4,6 +4,7 @@
 //   const runner = await createRunner({ canvas, output });      // loads Python; resolves when it is ready
 //   await runner.run(source, { filename: "sketch.py" });        // starts a sketch; frames appear on the canvas
 //   runner.stop();                                              // ends it, however busy it is
+//   const { tests, output, error } = await runner.check(source, { tests: [{ name, code }] });   // a learner's code and its tests (S-273)
 //
 // The learner's code runs in a module Web Worker (worker.js), so the page stays responsive. A worker runs one
 // file only. When a run ends, or Stop terminates it, a fresh worker starts loading at once, so the next Run
@@ -49,7 +50,7 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   microphone is asked for as usual)
  * @param {string} [options.cameraRefusal]  for a host that does not allow the camera (VS Code's panel): why, in a few words; a
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
- * @returns {Promise<{info: object, run: Function, stop: Function, keep: Function, running: boolean}>}
+ * @returns {Promise<{info: object, run: Function, check: Function, stop: Function, keep: Function, running: boolean}>}
  */
 export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
   const write = outputWriter(output);
@@ -158,6 +159,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       case "microphone": audio.microphoneCommand(message); break;
       case "camera": if (run) camera.command(message); break;
       case "started": started(message); break;
+      case "checked": if (run?.check) { run.resolve({ tests: message.tests, output: message.output, error: message.error }); finish("ended"); } break;     // a stopped check's answer is dropped
       case "stepped": if (run) { run.waiting = false; if (!message.running) finish("ended"); } break;
     }
   }
@@ -198,6 +200,21 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     return new Promise((resolve) => {
       run = { resolve, waiting: false, animation: 0 };
       worker.worker.postMessage({ type: "run", source, filename, width: logical.width, height: logical.height, scale, files, seed, stdin });
+    });
+  }
+
+  // Check (S-273, D-141 a): run `source` as plain Python, then each test, in the same worker and under the same `reuse` rules as run().
+  // `tests` is [{name, code}]. Resolves {tests: [{name, passed, message}], output, error}: `error` is the traceback when the code
+  // raised (then `tests` is []). The check counts as the run in progress, so stop() ends it, which is the only way out of a test
+  // that never ends: it resolves with `error` saying so.
+  async function checkCode(source, { filename = "main.py", stdin, files = {}, tests = [] } = {}) {
+    if (run) await stopRun();
+    worker ??= startWorker();
+    await worker.ready;
+    return new Promise((resolve) => {
+      const stopped = { tests: [], output: "", error: "The check was stopped." };
+      run = { resolve: (answer) => resolve(answer.ok === false ? stopped : answer), check: true, waiting: false, animation: 0 };
+      worker.worker.postMessage({ type: "check", source, filename, stdin, files, tests });
     });
   }
 
@@ -257,6 +274,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   return {
     info,                                // what the first worker reported: library versions, load times, bytes fetched
     run: runSketch,
+    check: checkCode,                    // check(source, {tests: [{name, code}], stdin, files}): the code, then each test (see checkCode)
     stop: stopRun,
     keep: keepRun,                       // keep(note): the picture, a copy of the code and a record, as files (see keepRun)
     audioState: () => audio.state(),     // sound unlocked? what each voice is doing? microphone open? (for tests and tools)

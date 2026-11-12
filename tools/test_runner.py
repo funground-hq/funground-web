@@ -240,6 +240,44 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             none[:2] == ["before", "Your name? "] and "OSError: [Errno 29] I/O error" in none[-1])
         checks["stdin: stdin that is not a list of strings gives one clear error"] = (
             stdin["bad"]["ok"] is False and any("stdin must be a list of strings" in t for t in texts(stdin["bad"])))
+    check = scenarios.get("checks")
+    if check:
+        basic = check["basic"]
+        by_name = {t["name"]: t for t in basic["tests"]}
+        checks["check: every test is answered in order, one passing and one failing with its own message"] = (
+            basic["error"] is None and [t["name"] for t in basic["tests"]] == ["passes", "message", "bare", "other", "sees", "changes", "unchanged"]
+            and by_name["passes"] == {"name": "passes", "passed": True, "message": ""}
+            and by_name["message"]["passed"] is False and by_name["message"]["message"] == "total should be 11")
+        checks["check: a bare assert gives a plain sentence with its line"] = (
+            by_name["bare"]["passed"] is False and by_name["bare"]["message"] == "This check failed: assert total == 11")
+        checks["check: another exception gives a plain sentence"] = (
+            by_name["other"]["passed"] is False and by_name["other"]["message"] == "The check raised NameError: name 'totl' is not defined")
+        checks["check: a test sees the learner's function and names, output (with the input() prompt) and source"] = (
+            by_name["passes"]["passed"] and by_name["sees"]["passed"] and basic["output"] == "Name? Hello, Ada\n")
+        checks["check: stdin lines reach the learner's input() and nothing is streamed as output"] = (
+            basic["output"].startswith("Name? Hello, Ada") and check["streamed"] == 0)
+        checks["check: one test's change to a name is not seen by the next, and what a test prints is discarded"] = (
+            by_name["changes"]["passed"] and by_name["unchanged"]["passed"] and "nowhere" not in basic["output"])
+        raises = check["raises"]
+        checks["check: learner code that raises gives error from the learner's file, with its line, and no tests"] = (
+            raises["tests"] == [] and raises["output"] == "1\n" and 'File "main.py", line 3' in raises["error"]
+            and "print(totl)" in raises["error"] and "NameError: name 'totl' is not defined" in raises["error"]
+            and "<runner>" not in raises["error"] and "<exec>" not in raises["error"] and "run_checks" not in raises["error"])
+        checks["check: a syntax error gives error with the line and no tests"] = (
+            check["syntax"]["tests"] == [] and 'File "main.py", line 1' in check["syntax"]["error"]
+            and "SyntaxError" in check["syntax"]["error"])
+        checks["check: input() with no lines given raises in the learner's code, as a plain run does"] = (
+            check["noInput"]["tests"] == [] and "OSError" in check["noInput"]["error"] and 'File "main.py", line 1' in check["noInput"]["error"])
+        runs_out = check["runsOut"]
+        checks["check: input lines running out give the plain EOFError sentence, with no frame of the runner's"] = (
+            runs_out["tests"] == [] and runs_out["output"] == "A? B? "
+            and "EOFError: input() has no more lines to read: this run was given 1." in runs_out["error"]
+            and 'File "main.py", line 2' in runs_out["error"] and "<runner>" not in runs_out["error"])
+        checks["check: tests that are not a list of {name, code} give an error and no tests"] = (
+            check["badTests"]["tests"] == [] and "tests must be a list" in check["badTests"]["error"])
+        after = check["after"]
+        checks["check: a normal run() after a check behaves as before"] = (
+            after["ok"] is True and after["ended"] == "ended" and after["output"] == ["after a check"])
     errors = scenarios.get("errors")
     if errors:
         said = [line["text"] for line in errors["output"]]
