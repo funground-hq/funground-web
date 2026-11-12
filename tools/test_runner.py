@@ -18,7 +18,9 @@ At another scale (--dpr 1.25) there is no golden: the check is that the frame is
 from __future__ import annotations
 
 import argparse
+import base64
 import gzip
+import hashlib
 import http.server
 import json
 import re
@@ -28,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+import zipfile
 from pathlib import Path
 
 from PIL import Image
@@ -74,6 +77,47 @@ def build_cases(funground: Path, runtime: Path) -> list[dict]:
         source = (runtime / "examples" / case["source"]).read_text(encoding="utf-8")
         case["tolerance"] = TOLERANCE.get(case["id"]) or (TOLERANCE["jpeg"] if JPEG.search(source) else None)
     return cases
+
+
+def build_wheel(folder: Path, file: str, files: dict[str, str], requires: list[str] = ()) -> dict:
+    """A tiny wheel written with zipfile (no pip, no network): the module(s) in `files`, and a .dist-info with METADATA, WHEEL and
+    RECORD. The name and version come from the file name. Returns its file name and SHA-256."""
+    name, version = file.split("-")[:2]
+    dist = f"{name}-{version}.dist-info"
+    metadata = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n" + "".join(f"Requires-Dist: {r}\n" for r in requires)
+    tag = "-".join(file.removesuffix(".whl").split("-")[-3:])
+    files = {**files, f"{dist}/METADATA": metadata, f"{dist}/WHEEL": f"Wheel-Version: 1.0\nGenerator: test_runner\nRoot-Is-Purelib: true\nTag: {tag}\n"}
+    record = []
+    for path, text in files.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b"=").decode()
+        record.append(f"{path},sha256={digest},{len(text.encode())}")
+    files[f"{dist}/RECORD"] = "\n".join(record + [f"{dist}/RECORD,,"]) + "\n"
+    with zipfile.ZipFile(folder / file, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, text in files.items():
+            info = zipfile.ZipInfo(path, (2026, 11, 12, 0, 0, 0))        # a fixed date: the same bytes every build
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, text)
+    return {"file": file, "sha256": hashlib.sha256((folder / file).read_bytes()).hexdigest()}
+
+
+def build_test_wheels(folder: Path) -> dict:
+    """S-276: the host wheels the packages scenario lists, in `folder` (which the test server serves), with index.json."""
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True)
+    wheels = {
+        "good": build_wheel(folder, "fgtest_good-0.1.0-py3-none-any.whl", {"fgtest_good/__init__.py": 'VERSION = "0.1.0"\n\n\ndef hello(name):\n    return f"hello, {name}"\n'},
+                            ['pytest ; extra == "test"', "sphinx; extra == 'docs'"]),
+        "badsum": build_wheel(folder, "fgtest_badsum-0.1.0-py3-none-any.whl", {"fgtest_badsum/__init__.py": "VALUE = 1\n"}),
+        "pandas": build_wheel(folder, "fgtest_pandas-0.1.0-py3-none-any.whl", {"fgtest_pandas/__init__.py": "VALUE = 2\n"}, ["pandas (>=2)"]),
+        "numpy": build_wheel(folder, "fgtest_numpy-0.1.0-py3-none-any.whl",
+                             {"fgtest_numpy/__init__.py": "def total():\n    import numpy as np\n    return int(np.arange(4).sum())\n"}, ["numpy>=1"]),
+        "tag": build_wheel(folder, "fgtest_tag-0.1.0-cp312-cp312-win_amd64.whl", {"fgtest_tag/__init__.py": "VALUE = 3\n"}),
+        "two": build_wheel(folder, "fgtest_two-0.1.0-py3-none-any.whl",
+                           {"fgtest_two/__init__.py": "def both():\n    import fgtest_good\n    import numpy as np\n    return fgtest_good.hello('two') + ' ' + str(int(np.arange(4).sum()))\n"},
+                           ["fgtest-good", "numpy"]),
+    }
+    (folder / "index.json").write_text(json.dumps(wheels, indent=1), encoding="utf-8")
+    return wheels
 
 
 def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent: dict, requests: list[str]):
@@ -177,6 +221,87 @@ def check_capabilities(ready: dict | None, checks: dict[str, bool]) -> dict[str,
     tested = {word: [ok for name, ok in checks.items() if name.startswith(word + ": ")] for word in words}
     return {"capabilities: ready lists what the runner can do, and every word has passing checks of its own": (
         bool(words) and all(results and all(results) for results in tested.values()))}
+
+
+def check_packages(packages: dict) -> dict[str, bool]:
+    """S-276: the host's packages. Every name starts with "packages: " (S-275: the capability word has checks of its own)."""
+    checks: dict[str, bool] = {}
+    has = lambda files, part: any(part in n for n in files)
+    end = lambda run: run["output"][-1] if run["output"] else ""
+    offers = lambda name, rest: f"ModuleNotFoundError: This page does not offer {name}. {rest}"
+    numpy, sklearn = packages["numpy"], packages["sklearn"]
+    checks["packages: numpy, on import, is fetched by the run that imports it and not at ready, and works"] = (
+        not has(numpy["atReady"], "/numpy-")
+        and numpy["numpy"]["output"] == ["45 6.0"] and numpy["numpy"]["ended"] == "ended"
+        and any("/numpy-" in n and n.endswith(".whl") for n in numpy["afterRun"])
+        and set(numpy["info"]["versions"]) == {"python", "pyodide"})
+    checks["packages: a second run that imports numpy again works in the same worker"] = numpy["again"]["output"] == ["45 6.0"]
+    checks["packages: scikit-learn, install at start, is fetched before ready, with its dependencies, and a model fits"] = (
+        has(sklearn["atReady"], "/scikit_learn-") and has(sklearn["atReady"], "/scipy-") and has(sklearn["atReady"], "/numpy-")
+        and sklearn["sklearn"]["output"] == ["2.0 1.0"] and sklearn["sklearn"]["ended"] == "ended")
+    checks["packages: the versions of what was loaded at start are in info.versions"] = (
+        {"python", "pyodide", "scikit-learn", "scipy", "numpy"} <= set(sklearn["versions"]) and sklearn["versions"]["scikit-learn"][0].isdigit())
+    outside = numpy["outside"]
+    checks["packages: an import outside the list gives the plain sentence, the learner's file and line, and the file stops there"] = (
+        outside["ended"] == "error" and outside["output"][0] == "before" and len(outside["output"]) == 2
+        and offers("pandas", "It offers: numpy.") in outside["output"][1] and 'File "main.py", line 2' in outside["output"][1]
+        and "No module named" not in outside["output"][1] and "<runner>" not in outside["output"][1]
+        and "micropip" not in outside["output"][1] and "loadPackage" not in outside["output"][1])
+    checks["packages: an import outside the list fetches nothing, and a dotted import names its top-level package"] = (
+        not has(numpy["afterOutside"], "pandas") and not has(numpy["afterOutside"], "scikit_learn")
+        and offers("sklearn", "It offers: numpy.") in end(numpy["outsideDotted"]))
+    checks["packages: check() gives the same sentence in its error"] = (
+        numpy["checked"]["tests"] == [] and offers("pandas", "It offers: numpy.") in numpy["checked"]["error"]
+        and 'File "main.py", line 1' in numpy["checked"]["error"])
+    checks["packages: Python's own library and a module in the run folder are never touched"] = numpy["folder"]["output"] == ["3", "library ok"]
+    checks["packages: with packages: [] only Python's own library is offered, and says so"] = (
+        packages["empty"]["outside"]["ended"] == "error" and offers("numpy", "It offers Python's own library only.") in end(packages["empty"]["outside"])
+        and packages["empty"]["library"]["output"] == ["2"])
+    session = packages["session"]
+    checks["packages: funground and numpy together: a sketch uses both, and a frame is drawn"] = (
+        session["sketch"]["started"]["ok"] is True and session["sketch"]["output"] == ["6"] and session["drawn"] >= 1
+        and "pycairo" in session["versions"])
+    checks["packages: in the funground runner an import outside the list gives the sentence, at the top of the file and inside draw()"] = (
+        session["outside"]["ended"] == "error" and offers("pandas", "It offers: funground, numpy.") in end(session["outside"])
+        and 'File "main.py", line 2' in end(session["outside"])
+        and session["loop"]["ended"] == "error" and offers("pandas", "It offers: funground, numpy.") in end(session["loop"])
+        and 'File "main.py", line 4' in end(session["loop"])
+        and not has(session["outside"]["output"] + session["loop"]["output"], "micropip"))
+    wheels = packages["wheels"]
+    good_file = "fgtest_good-0.1.0-py3-none-any.whl"
+    checks["packages: a host wheel is fetched when a run imports it, not at ready; its checksum is right and it installs and imports"] = (
+        not any("/wheels/" in r for r in wheels["requestedAtReady"]) and any(r.endswith(good_file) for r in wheels["requestedAfter"])
+        and wheels["good"]["output"] == ["hello, Ada"] and wheels["good"]["ended"] == "ended")
+    bad = f"Refused fgtest_badsum-0.1.0-py3-none-any.whl: its SHA-256 is {wheels['sha']['badsum']}, the host listed {'0' * 64}. It was not installed."
+    checks["packages: a wheel whose checksum differs is refused with the sentence, and the run does not start"] = (
+        wheels["badsum"]["ended"] == "error" and wheels["badsum"]["output"] == [bad])
+    checks["packages: a wheel that requires a package the page does not offer is refused, naming it"] = (
+        wheels["pandas"]["ended"] == "error"
+        and wheels["pandas"]["output"] == ["fgtest-pandas needs pandas, which this page does not offer. Add it to packages."])
+    checks["packages: a wheel that requires numpy installs when numpy is listed, and numpy is loaded for it"] = (
+        wheels["withNumpy"]["output"] == ["6"] and wheels["withNumpy"]["ended"] == "ended")
+    checks["packages: a wheel that requires another host wheel installs both"] = wheels["two"]["output"] == ["hello, two 6"]
+    tag_start = "Refused fgtest_tag-0.1.0-cp312-cp312-win_amd64.whl: its tag is cp312-cp312-win_amd64, and this page takes only py3-none-any, py2.py3-none-any, cp314-cp314-pyemscripten_"
+    checks["packages: a wheel built for another platform is refused, naming its file and tag"] = (
+        wheels["tag"]["ended"] == "error" and len(wheels["tag"]["output"]) == 1
+        and wheels["tag"]["output"][0].startswith(tag_start) and wheels["tag"]["output"][0].endswith("It was not installed."))
+    checks["packages: a run after a refused wheel works in the same worker"] = wheels["unrelated"]["output"] == ["no wheel needed"]
+    checks["packages: install at start installs the wheel before ready and reports its version; a wheel refused at start fails createRunner"] = (
+        wheels["start"]["versions"].get("fgtest-good") == "0.1.0" and wheels["start"]["run"]["output"] == ["0.1.0"]
+        and has(wheels["start"]["fetched"], good_file) and wheels["startBad"] == bad and wheels["startTag"].startswith(tag_start))
+    fetched = numpy["afterOutside"] + sklearn["afterRun"] + wheels["fetched"] + wheels["start"]["fetched"]
+    checks["packages: nothing is requested from pypi.org or files.pythonhosted.org, and no micropip is loaded"] = (
+        not has(fetched, "pypi.org") and not has(fetched, "pythonhosted") and not has(fetched, "micropip"))
+    rejected = packages["rejected"]
+    checks["packages: createRunner rejects options that cannot work, each with one plain sentence"] = (
+        rejected["notList"] == 'createRunner(): packages must be a list, for example ["numpy"].'
+        and rejected["notEntry"] == "createRunner(): each entry of packages must be a package name or a wheel written as {name, url, sha256}."
+        and rejected["noSha"] == 'createRunner(): the wheel "x" in packages needs a name, a url and a sha256 of 64 hexadecimal characters.'
+        and rejected["noName"] == "createRunner(): the wheel in packages needs a name, a url and a sha256 of 64 hexadecimal characters."
+        and rejected["install"] == 'createRunner(): install must be "on import" or "at start".')
+    checks["packages: a name Pyodide does not have rejects createRunner, naming it"] = (
+        rejected["unknown"] == '"pandsa" is not a package Pyodide has, so this page cannot offer it.')
+    return checks
 
 
 def check_scenarios(scenarios: dict) -> dict[str, bool]:
@@ -289,7 +414,7 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             and not any("/runtime/" in n or "manifest.json" in n or "/wheels/" in n or "/fonts/" in n or any(w in n for w in wheels) for n in seen))
         checks["run: Pyodide alone reports its Python and Pyodide versions, and the same capabilities"] = (
             set(alone["info"]["versions"]) == {"python", "pyodide"} and alone["info"]["versions"]["python"].startswith("3.14")
-            and alone["info"]["capabilities"] == ["run", "stop", "stdin", "check"])
+            and alone["info"]["capabilities"] == ["run", "stop", "stdin", "check", "packages"])
         plain = alone["plain"]
         checks["run: Pyodide alone runs a plain script that prints, reads input lines and its files, and the run ends with the size it was given"] = (
             texts(plain) == ["Name? ", "Hello, Ada", "from a file", "no newline"] and plain["ended"] == "ended"
@@ -313,12 +438,13 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
         checks["run: check() answers in Pyodide alone as in a full runner"] = (
             alone["checked"]["error"] is None and alone["checked"]["output"] == "6\n" and answer["six"] == {"name": "six", "passed": True, "message": ""}
             and answer["wrong"] == {"name": "wrong", "passed": False, "message": "no"})
-        checks["run: createRunner rejects packages other than [] or [\"funground\"] with one plain sentence"] = all(
-            reason.startswith("createRunner(): packages can only be [] or [\"funground\"]") and "S-276" in reason for reason in alone["rejected"])
         default = names(alone["default_resources"])
         checks["run: the default runner still fetches manifest.json, the funground wheel and the three C-extension wheels"] = (
             any(n.endswith("/runtime/manifest.json") for n in default)
             and all(any(f"/wheels/{w}" in n for n in default) for w in wheels))
+    packages = scenarios.get("packages")
+    if packages:
+        checks.update(check_packages(packages))
     errors = scenarios.get("errors")
     if errors:
         said = [line["text"] for line in errors["output"]]
@@ -380,7 +506,9 @@ def main() -> int:
     parser.add_argument("--funground", required=True, type=Path)
     parser.add_argument("--profile", type=Path, help="keep and reuse this Chrome profile (a second run is a warm start)")
     parser.add_argument("--dpr", type=float, default=1, help="device scale factor (the byte-for-byte pixel check is for 1)")
-    parser.add_argument("--timeout", type=int, default=240, help="seconds per Chrome start")
+    # 900: the scenarios now load scikit-learn (S-276, about 28 MB and 20 to 50 s cold) on top of everything else; a picture batch
+    # takes far less, and the limit only matters when something hangs
+    parser.add_argument("--timeout", type=int, default=900, help="seconds per Chrome start")
     parser.add_argument("--no-prewarm", action="store_true", help="the runner starts a worker only when a run needs it")
     parser.add_argument("--limit", type=int, help="run only the first N cases (for debugging)")
     parser.add_argument("--skip-scenarios", action="store_true", help="only the examples")
@@ -389,6 +517,7 @@ def main() -> int:
     runtime = REPO / "runner" / "runtime"
     cases = build_cases(args.funground.resolve(), runtime)[:args.limit]
     out = REPO / "tests" / "out"
+    build_test_wheels(out / "wheels")
     snaps = out / "snaps"
     shutil.rmtree(snaps, ignore_errors=True)
     snaps.mkdir(parents=True)

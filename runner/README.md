@@ -49,7 +49,8 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 | `pyodideUrl` | jsDelivr (in `worker.js`) | The folder Pyodide loads from. |
 | `onnxruntimeUrl` (S-232) | jsDelivr, one exact version (in `worker.js`) | The folder `onnxruntime-web` loads from, for `ml.pose()` and `ml.hand()`. It must hold `ort.wasm.mjs` and the `.wasm` file beside it. |
 | `runtimeUrl` | `runtime/` under `baseUrl` | The folder holding `manifest.json` and the wheels. A manifest entry with role `dependency` is installed from there instead of PyPI. |
-| `packages` (S-274) | left out | What is loaded besides Python. Left out or `["funground"]`: funground and its libraries, as always. `[]`: Pyodide alone, and `run()` runs plain Python. Anything else makes `createRunner` reject. See "What gets loaded" below. |
+| `packages` (S-274, S-276) | left out | What learners' code may load. Left out or `["funground"]`: funground and its libraries, as always. `[]`: Pyodide alone, and `run()` runs plain Python. Add Pyodide package names (`"numpy"`) and your own wheels (`{name, url, sha256}`) to offer more. See "What gets loaded" and "The host's packages" below. |
+| `install` (S-276) | `"on import"` | When the listed packages and wheels are loaded: `"on import"` (just before a run that imports them) or `"at start"` (all of them, before the runner is ready). Heavy packages belong at start. |
 | `reuse` (D-083) | `false` | Run the next sketch in the same worker (the same Python) when the last one has ended, or stops when asked: a re-run takes about 0.1 s instead of loading Python again. funground's `Session` starts each sketch afresh. A sketch that does not stop within a second (`while True:`, or a long `setup()`) still has its worker ended, and a new Python loads (seconds). |
 | `onRestart` | none | With `reuse`: called when that happens, so the page can say why the next run waits. |
 | `spare` | `false` | While a sketch runs, keep the next run's worker loaded too, so that a re-run starts at once. Costs a second Python's memory. Not needed with `reuse`. |
@@ -230,8 +231,7 @@ C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`
 | `[]` | Pyodide alone: nothing from `runtime/`, no `micropip`, no wheels, no fonts | the file runs as a plain Python script |
 
 - A host that says nothing gets exactly the start it always had. Play and the VS Code panel do not change.
-- Anything else (another name, or not a list) makes `createRunner` reject with one sentence: `packages can only be [] or ["funground"]
-  in this runner; other packages come later (S-276)`. S-276 widens the same list to Pyodide packages and a host's own wheels.
+- Anything else in the list is the host's own: Pyodide packages and wheels (S-276, next section).
 - **funground is implicit wherever it is loaded.** It is always installed at start, never when a file imports it: the source cannot say
   for sure whether a file needs it (a file that defines `draw()` and never calls `run()` still runs as a sketch, D-088). When it is loaded, every script and sketch goes through its `Session`,
   with or without `import funground`. There is no plain-script path in a runner that has funground (`check()` is the one exception, S-273).
@@ -246,6 +246,77 @@ C-extension wheels already in `runtime/wheels/` (checked against `manifest.json`
   `ModuleNotFoundError: This runner was started without funground, so "import funground" cannot work here.`
 - `runner.info.versions` holds `python` and `pyodide` (a full runner lists its libraries too). `runner.info.fonts` is `"none"`.
   `runner.info.capabilities` is the same list.
+
+## The host's packages (S-276)
+
+A host says what its learners' code may load, and when: `createRunner({packages, install})` (D-144 e). Each entry of `packages` is one of:
+
+| Entry | Meaning |
+|---|---|
+| `"funground"` | funground, as above. Implicit: always installed at start, and its presence decides whether `run()` uses a `Session`. |
+| `"numpy"`, `"scikit-learn"` | A package of the Pyodide distribution, by its name in `pyodide-lock.json` (any case; `_` and `.` count as `-`). What it depends on comes with it: `"scikit-learn"` brings scipy, numpy, joblib and threadpoolctl. |
+| `{name, url, sha256, imports?}` | A wheel the host serves. `url` is relative to `baseUrl`. `imports` are the names a learner writes after `import`; the default is the name with `-` changed to `_`. |
+
+```js
+const runner = await createRunner({
+  canvas, baseUrl,
+  packages: ["funground", "numpy", { name: "seaborn", url: "wheels/seaborn-0.13.2-py3-none-any.whl", sha256: "…" }],
+  install: "on import",            // or "at start"
+});
+```
+
+`tools/wheel_entry.py <wheel>` prints the entry for a wheel (`--url` sets the address the page will use).
+
+- **`install: "on import"`** (the default). Before a `run()` or `check()`, the runner reads the learner's file, and the `.py` files passed in `files`,
+  with Pyodide's own `find_imports` (it reads the code and runs none), and loads the listed packages and wheels they import. The first run that
+  imports numpy waits for it; later runs do not.
+- **`install: "at start"`.** Everything listed is loaded before `ready`, so `createRunner` takes longer and the first Run takes no extra time. Use it
+  for heavy packages: importing scikit-learn alone takes 7 to 10 s even when its files are cached.
+- **What a run costs** (spike S-276, `spikes/S-276/RESULTS.md` on the branch `spike/s276-packages`, one laptop, medians of three, with the caveats there): numpy adds about 3 MB and
+  1 s to a start. scikit-learn adds about 18.5 MB (scipy is 14 MB of it) and takes 20 to 50 s on a first visit, over a fast connection or
+  a slow one; warm, 4 s to load and 8 s to import it. Serve the files compressed: the `.wasm` goes from 9.6 MB to 3.4 MB.
+- **A name Pyodide does not have** (`packages: ["pandsa"]`) makes `createRunner` reject: `"pandsa" is not a package Pyodide has, so this page cannot offer it.`
+  A malformed entry or a bad `install` rejects at once, with one sentence.
+- **An import outside the list.** Nothing is fetched for it. The learner's own line gets: `This page does not offer pandas. It offers: numpy, scikit-learn.`
+  (the listed names, in the host's order; for `[]`: `It offers Python's own library only.`). Python's own library, a file in the run folder and anything
+  already installed are never touched. This holds in a `Session` too, at the top of the file or inside `draw()`. Pyodide's own hint about `micropip` is not shown.
+- **A package the browser could not fetch.** `loadPackage` does not fail when a file is blocked (spike finding 4.3); the runner checks what loaded
+  and fails the run with `numpy could not be loaded (the browser could not fetch it).`
+- **Host wheels.** The runner fetches the wheel, computes its SHA-256 and refuses it when it differs from the host's:
+  `Refused seaborn-0.13.2-py3-none-any.whl: its SHA-256 is <actual>, the host listed <listed>. It was not installed.`
+  It accepts only the tags `py3-none-any`, `py2.py3-none-any` and this Pyodide's own (`cp314-cp314-pyemscripten_<abi>_wasm32`), and refuses any other,
+  naming the file and the tag. It reads the wheel's `METADATA`: each `Requires-Dist` must be a package the page offers (listed, or something a listed package
+  depends on, or another host wheel), or the wheel is refused: `seaborn needs pandas, which this page does not offer. Add it to packages.`
+  Then it unpacks the wheel into `site-packages` (14 ms). **No micropip, and nothing from PyPI.** A wheel refused at start fails `createRunner`; one refused on import
+  fails that run. **Limit:** there is no evaluator for environment markers, so a requirement with a marker (`; python_version < "3.9"`) counts as needed, unless the marker
+  mentions `extra` (those are skipped). A wheel that needs an installer's work (entry points, a `.data` folder) is not installed correctly: `unpackArchive` only unpacks.
+- `runner.info.versions` lists the version of each package loaded at start (and what it brought), and of each wheel installed at start. `runner.info.capabilities` has `"packages"`.
+
+### Containing learner code needs a Content Security Policy
+
+The runner cannot keep learner code to the list by itself. Learner code can call `pyodide_js.loadPackage(...)` or `fetch(...)`, and what the runner checks (its list, its
+sentences) is only help for learners. A host that must contain learner code does it in the browser, with the page's policy (spike S-276, criterion 4):
+
+1. Start the worker from a `blob:` URL (the runner does that when its files are on another origin), or send a `Content-Security-Policy` header with `worker.js`.
+   A `blob:` worker obeys the policy of the page that made it. A worker started from an ordinary URL obeys only the header on its own script; the page's `<meta>` policy does nothing to it.
+2. Set `connect-src` to the host's own origins. That stops `fetch`, `XMLHttpRequest` and `pyfetch`, and (with the files below) `loadPackage` of anything else.
+   `connect-src` does not cover `import()` of a module on another origin: set `script-src` to the host's own origins too, with `'wasm-unsafe-eval'` and without `'unsafe-eval'`.
+3. Serve a copy of Pyodide with only the listed files (set `pyodideUrl`), so that the policy allows the host's origin and no CDN. Allowing all of jsDelivr lets learner code load any Pyodide package.
+   Cutting the lock file to the host's list stops loading by name but not by full address.
+
+The copy needs exactly these files (Pyodide 314.0.7, numpy and scikit-learn):
+
+| File | Bytes | For |
+|---|---|---|
+| `pyodide.mjs`, `pyodide.asm.mjs`, `pyodide.asm.wasm`, `python_stdlib.zip` | 17,931 + 1,250,344 + 9,598,218 + 2,545,637 | core |
+| `pyodide-lock.json` | 119,077 | core (can be cut to the listed packages) |
+| `numpy-2.4.6-cp314-cp314-pyemscripten_2026_0_wasm32.whl` | 2,960,568 | numpy |
+| `scipy-1.18.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl` | 14,029,750 | scikit-learn |
+| `scikit_learn-1.8.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl` | 4,449,204 | scikit-learn |
+| `joblib-1.5.3-py3-none-any.whl`, `threadpoolctl-3.6.0-py3-none-any.whl` | 180,317 + 18,638 | scikit-learn |
+
+This copy does not hold what funground's own start loads (`micropip`, `fonttools`): a host that lists `"funground"` adds them. When a request is blocked, the learner sees
+`JsException: TypeError: Failed to fetch` (fetch), `AbortError: Failed to fetch` (pyfetch) or `NetworkError: Failed to execute 'send' on 'XMLHttpRequest'`.
 
 ## Models (S-232)
 
@@ -314,7 +385,8 @@ drawing should not touch the audio); and a microphone that comes back out of the
 
 - `runner/demo.html`: serve the repository root with the venv's `python -m http.server` and open `/runner/demo.html`.
 - `tools/test_runner.py --funground <checkout>`: headless Chrome, Session 1 and gallery examples against the goldens
-  (byte for byte at 1x), Stop, errors, events, fonts on demand (request counts) and saved files (`onFile`). Reports in `tests/out/` (git-ignored). `--dpr 1.25` checks a fractional
+  (byte for byte at 1x), Stop, errors, events, fonts on demand (request counts), saved files (`onFile`), and the host's packages (S-276: numpy and
+  scikit-learn from Pyodide, small wheels built with `zipfile` and served from `tests/out/wheels/`; it needs the network for Pyodide's packages). Reports in `tests/out/` (git-ignored). `--dpr 1.25` checks a fractional
   scale (size and not blank); `--limit 1 --skip-scenarios [--profile DIR]` measures first load.
 - `tools/test_sound.py --funground <checkout>`: sound and the microphone (S-137) in headless Chrome with a fake microphone:
   the examples' sound commands against CPython's, audible output at the speakers, the fake microphone's level reaching
