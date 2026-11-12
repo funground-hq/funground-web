@@ -4,9 +4,10 @@
 // The page drives it; every message has a `type`.
 //
 //   page -> worker
-//     init   {runtimeUrl?, pyodideUrl?, onnxruntimeUrl?, modelsScripts?}   load Pyodide and install everything; answers `ready`.
+//     init   {runtimeUrl?, pyodideUrl?, onnxruntimeUrl?, modelsScripts?, packages?}   load Pyodide and install everything; answers `ready`.
 //                                           `onnxruntimeUrl` is the folder onnxruntime-web loads from (default below); `modelsScripts`
-//                                           is {worker, glue}, the addresses of models-worker.js and models-glue.js
+//                                           is {worker, glue}, the addresses of models-worker.js and models-glue.js. `packages` (S-274):
+//                                           left out or ["funground"] installs funground; [] loads Pyodide alone (see "Pyodide alone")
 //     run    {source, filename, width, height, scale, files, seed?, stdin?}   start the file; answers `started`. `files` maps a path
 //                                           to bytes: data beside the sketch, and other .py files it may import. `stdin` (S-272)
 //                                           is a list of strings, the lines input() and sys.stdin read in order
@@ -26,7 +27,8 @@
 //   worker -> page
 //     ready    {versions, capabilities, timings, resources, fonts}   everything is installed and checked; capabilities is
 //                                           CAPABILITIES (S-275); fonts is "on open" (S-211: each font is fetched when funground first opens it)
-//     started  {width, height, running}         the file ran; the canvas size it asked for (logical pixels)
+//     started  {width, height, running}         the file ran; the canvas size it asked for (logical pixels). Pyodide alone:
+//                                               the size `run` was given, and running is false
 //     frame    {pixels, width, height}          RGBA bytes (physical pixels); the ArrayBuffer is transferred
 //     stepped  {running}                        the step is done; false when the sketch has ended
 //     output   {stream, text}                   one line of print() ("stdout") or of an error ("stderr"), without its newline; or
@@ -126,7 +128,8 @@ function neededFor(sources) {
 }
 
 let py = null;
-let fonts = null;                       // {fetchFont, checks} for every Session (fontSupport)
+let withFunground = true;               // false: Pyodide alone (S-274); run() then runs a plain script, never a Session
+let fonts = null;                      // {fetchFont, checks} for every Session (fontSupport)
 let session = null;
 let runtimeFolder = null;               // {url, manifest} of the runtime folder (for wheels installed on demand)
 let onnxruntimeUrl = ONNXRUNTIME;
@@ -228,7 +231,16 @@ function fetchUrl(address) {
 
 // ---- setup
 
-async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts }) {
+// Pyodide alone (S-274, D-140 a, D-144 e). `packages` is what the host asked for: left out or ["funground"] is today's start; []
+// is Pyodide and nothing else (S-271: 6.24 MB and 4.3 s cold, against 10.34 MB and 7.3 s). runner.js has checked the value.
+//
+// funground is implicit wherever it is loaded (the maintainer, 12 Nov): when it is listed it is installed here, at start, never
+// when a file imports it. The source cannot say for sure whether a file needs it (a file that defines draw() and never calls
+// run() still runs as a sketch, D-088), and an implicit library is there before the first line runs. And when it is loaded
+// every file goes through its Session. There is no plain-script path in a runner that has funground; a runner
+// without it has nothing but the plain path (plainRun). The two never mix in one worker.
+async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts, packages }) {
+  withFunground = packages === undefined || packages.includes("funground");
   const runtime = new URL(runtimeUrl ?? "runtime/", import.meta.url);
   onnxruntimeUrl = onnxruntimeOption ?? ONNXRUNTIME;
   modelsScripts = scripts ?? { worker: new URL("models-worker.js", import.meta.url).href, glue: new URL("models-glue.js", import.meta.url).href };
@@ -244,6 +256,15 @@ async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxrunt
   py.setStdout({ write: writers.stdout.write });
   py.setStderr({ write: writers.stderr.write });
   lap("pyodide");
+
+  if (!withFunground) {
+    // The glue imports only Python's own library, so it runs as it is. Nothing else is fetched: no micropip, no fonttools, no manifest.
+    py.runPython(PYTHON_GLUE, { filename: "<runner>" });
+    const versions = { python: py.globals.get("python_version")(), pyodide: py.version };
+    lap("glue");
+    const resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize, transfer: e.transferSize }));
+    return post({ type: "ready", versions, capabilities: CAPABILITIES, timings, resources, fonts: "none" });
+  }
 
   const manifest = await (await fetch(new URL("manifest.json", runtime))).json();
   const wheelUrls = (role) => manifest.files.filter((f) => f.role === role).map((f) => new URL(f.name, runtime).href);
@@ -426,11 +447,42 @@ def run_checks(source, filename, names, codes):
             output = printed.getvalue()
             results = [_run_one_check(name, code, namespace, output, source) for name, code in zip(names, codes)]
     finally:
-        for name in set(sys.modules) - before:      # helpers the file imported are forgotten, as a run's are
-            path = getattr(sys.modules[name], "__file__", None) or ""
-            if run_folder and path.startswith(run_folder):
-                del sys.modules[name]
+        forget_run_modules(before)
     return json.dumps({"tests": results, "output": printed.getvalue(), "error": error})
+
+def forget_run_modules(before):
+    """Helpers the file imported from the run folder are forgotten, as a run's are, so an edited helper is read again."""
+    for name in set(sys.modules) - before:
+        path = getattr(sys.modules[name], "__file__", None) or ""
+        if run_folder and path.startswith(run_folder):
+            del sys.modules[name]
+
+def python_version():
+    return sys.version.split()[0]
+
+def run_plain(source, filename):
+    """S-274: a runner without funground runs the file as a plain script, as "python filename" would. What it prints goes out
+    through sys.stdout, which the worker streams. If it raises, the error goes up with the file's own frames, which the
+    worker's fail() trims to the learner's file.
+
+    A file that imports funground gets one plain sentence in place of ModuleNotFoundError's "No module named 'funground'". This
+    catches the error and does not read the source: the error is exact (a source search would miss an import inside a function
+    and would find one inside a string or a comment), it names the learner's own line, and it costs nothing when there is none.
+    The exception keeps its traceback, so that line is the one shown."""
+    before = set(sys.modules)
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    try:
+        compiled = compile(source, filename, "exec")
+        exec(compiled, {"__name__": "__main__", "__file__": filename})
+    except SystemExit:
+        pass                                        # exit() ends a script; it is not a failure
+    except ModuleNotFoundError as error:
+        if error.name == "funground":
+            error.msg = 'This runner was started without funground, so "import funground" cannot work here.'
+            error.args = (error.msg,)
+        raise
+    finally:
+        forget_run_modules(before)
 
 def check_real_libraries():
     """Nothing is stubbed: the three C libraries are compiled extension modules (.so), and funground imports them."""
@@ -467,6 +519,7 @@ async function run({ source, filename, width, height, scale, files, seed, stdin 
   startRunFolder(files);
   sendNewFiles({ record: true });                                          // what is there now is not the sketch's: only its later writes are sent,
                                                                            // a passed-in file too once the sketch rewrites it (a kept take.gif, S-221)
+  if (!withFunground) return plainRun({ source, filename, width, height });
   const sources = [source, ...Object.entries(files ?? {}).filter(([name]) => name.endsWith(".py")).map(([, bytes]) => new TextDecoder().decode(bytes))];
   const needed = neededFor(sources);
   await py.loadPackage(needed.packages, { messageCallback: console.log, errorCallback: console.error });   // none for most sketches
@@ -485,6 +538,22 @@ async function run({ source, filename, width, height, scale, files, seed, stdin 
   if (!session.running) flushOutput();                                     // a script has ended: its last line, even without a newline
   const [canvasWidth, canvasHeight] = session.canvas_size.toJs();
   post({ type: "started", width: canvasWidth, height: canvasHeight, running: session.running });
+}
+
+// A run in a runner without funground (S-274): a plain script in the run folder, already made by run() with its `files` and `stdin`.
+// print() streams as a funground script's does (the writers above); an error goes through fail(). The answer is `started` with
+// the size run() was given and `running: false`, so the page ends the run as it ends a finished script. No ON_DEMAND installs:
+// those groups are funground's needs (its pictures, GIFs and models), and there is no funground to need them.
+function plainRun({ source, filename, width, height }) {
+  try {
+    py.globals.get("run_plain")(source, filename);
+  } catch (error) {
+    sendNewFiles();
+    return fail(error);
+  }
+  sendNewFiles();                                                          // a script saves while it runs
+  flushOutput();                                                           // its last line, even without a newline
+  post({ type: "started", width, height, running: false });
 }
 
 // Check (S-273, D-141 a): the file runs as plain Python and then the tests do, all in run_checks (the glue). Nothing is streamed:
