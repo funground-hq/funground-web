@@ -80,6 +80,7 @@ if (!runner.info.capabilities?.includes("stdin")) refuse("This exercise needs in
 | `run` | S-275 | `run(source, {...})` runs a file; `print()` and errors reach `output` |
 | `stop` | S-275 | `stop()` ends a run at once, even one stuck in `while True:`, and the next run works |
 | `stdin` | S-272 | `run(source, {stdin: [lines]})` gives the lines `input()` reads (below) |
+| `check` | S-273 | `check(source, {tests})` runs a learner's code and then your tests on it (below) |
 
 - A word is added by the story that ships it, and never removed within a version line. A runner older than S-275 has no
   `capabilities` at all: treat that as `["run", "stop"]`.
@@ -107,6 +108,45 @@ await runner.run('name = input("Your name? ")\nprint("Hello,", name)', { filenam
 - Output that has no newline yet, a prompt or a `print(..., end="")`, is sent when `input()` reads and when the run ends
   (the script finishes, the sketch ends or fails, or `stop()` with `reuse`). Before S-272 such a last line was lost, or with
   `reuse` came out at the front of the next run's output (S-271).
+
+## Checks (S-273)
+
+A host sends a learner's code and its tests, and gets one result for each test (D-139 a, D-141 a):
+
+```js
+const { tests, output, error } = await runner.check(source, {
+  filename: "main.py",                                   // default
+  stdin: ["Ada"],                                        // optional: the lines input() reads, as for run()
+  files: { "data/words.txt": bytes },                    // optional: as for run()
+  tests: [
+    { name: "doubles", code: "assert double(4) == 8, 'double(4) should be 8'" },
+    { name: "greets", code: "assert 'Hello, Ada' in output" },
+  ],
+});
+// tests: [{ name: "doubles", passed: true, message: "" }, { name: "greets", passed: false, message: "This check failed: assert 'Hello, Ada' in output" }]
+```
+
+- The learner's code runs first, as a plain script in a new run folder. It does not go through funground's `Session`: there is no
+  canvas and no `setup()` or `draw()`. What it prints is not streamed. It comes back in the answer as `output`, one string,
+  exactly as printed, an `input()` prompt too: `"Name? Hello, Ada\n"`.
+- If the code raises, or has a syntax error, `error` is the traceback from the learner's file down (with the source line and the
+  `^` markers, as Python shows them), `tests` is `[]`, and no test runs. Otherwise `error` is `null`.
+- Each test then runs in order, in the same Python. Its `code` is Python. It sees the learner's names (functions, variables) and two more:
+  `output` (the string the learner printed) and `source` (the learner's code as one string). A test gets its own shallow copy of
+  those names, so a name one test sets is not seen by the next. A list it changes in place is. What a test prints is discarded.
+- `passed` is true when the test's code runs without an exception. When it does not, `message` says why:
+  - `assert x == 1, "text"` gives `text`.
+  - `assert x == 1` with no text gives `This check failed: assert x == 1`.
+  - Any other exception gives `The check raised NameError: name 'totl' is not defined`.
+  - `message` is `""` when the test passed.
+- Messages: the page sends `{type: "check", source, filename, stdin, files, tests}` and the worker answers
+  `{type: "checked", tests, output, error}` (the worker's table is at the top of `worker.js`).
+- `check()` ends a run in progress first, uses the same worker, and follows the same `reuse` rules as `run()`. It counts as the run
+  in progress: `onFinish("ended")` is called when it is answered. A host that never calls `check()` sees no change.
+- **A test that never ends** (`while True:`) cannot answer. The host calls `stop()`, which ends the worker as it does for a sketch,
+  and the promise resolves with `error: "The check was stopped."`. There is no timeout in the runner: the host decides how long to wait.
+- For test writers: a test sees the learner's whole program. A check on the source text (`"for" in source`) is easy to fool, with a
+  comment or a string. Prefer checking what the code does: call the function, look at `output`.
 
 ## Files the sketch saves (S-212)
 

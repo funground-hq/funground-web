@@ -365,6 +365,44 @@ log('input lines');
   runner.stop();
 }
 
+log('checks');
+// ---- Checks (S-273): runner.check(source, {tests}) runs the code as plain Python, then each test; the answer is {tests, output, error}.
+// A reused runner, as above: the last case runs an ordinary script on the same worker, to see that a check leaves nothing behind.
+{
+  const out = [];
+  let ended = null;
+  const runner = await createRunner({
+    canvas: document.createElement("canvas"), baseUrl: new URL("/runner/", location.href), reuse: true,
+    output: (text, stream) => out.push({ stream, text }), onFinish: (reason) => { ended = reason; },
+  });
+  const test = (name, code) => ({ name, code });
+  const learner = 'def double(n):\n    return n * 2\n\nname = input("Name? ")\ntotal = double(5)\nprint("Hello,", name)\n';
+  const tests = [
+    test("passes", "assert double(4) == 8"),
+    test("message", 'assert total == 11, "total should be 11"'),
+    test("bare", "x = 1\nassert total == 11"),
+    test("other", "print(totl)"),
+    test("sees", 'assert output == "Name? Hello, Ada\\n" and "def double" in source and name == "Ada"'),
+    test("changes", 'total = 99\nprint("this goes nowhere")'),
+    test("unchanged", 'assert total == 10, "total is " + str(total)'),
+  ];
+  const checks = {};
+  checks.basic = await runner.check(learner, { stdin: ["Ada"], tests });
+  checks.streamed = out.length;                                            // a check sends no output messages
+  checks.raises = await runner.check("total = 1\nprint(total)\nprint(totl)\n", { tests: [test("never", "assert True")] });
+  checks.syntax = await runner.check("print(1\n", { tests: [test("never", "assert True")] });
+  checks.runsOut = await runner.check('a = input("A? ")\nb = input("B? ")\n', { stdin: ["1"], tests: [test("never", "assert True")] });
+  checks.noInput = await runner.check('input("Name? ")\n', { tests: [test("never", "assert True")] });
+  checks.badTests = await runner.check("print(1)\n", { tests: "assert True" });
+  out.length = 0; ended = null;
+  const started = await runner.run('print("after", input())\n', { filename: "main.py", stdin: ["a check"] });
+  await until(() => ended !== null, 30000, "the script to end").catch(() => {});
+  await sleep(100);
+  checks.after = { ok: started.ok, ended, output: out.map((l) => l.text) };
+  report.scenarios.checks = checks;
+  runner.stop();
+}
+
 log('keep');
 // ---- Keep (S-226): runner.keep(note) runs f.keep(note); studio/001.png, .py and .json each reach onFile once
 // Its own runner, made as Play's preview makes it (reuse: true): then a script that has ended keeps its Python and can still be kept.
