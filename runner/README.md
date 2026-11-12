@@ -65,6 +65,27 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
   other `.py` files the sketch imports (`helpers.py`); modules imported that way are forgotten when the run stops, so an
   edited helper is read again.
 
+## What the runner can do (S-275)
+
+`runner.info.capabilities` lists what this runner can do, as words (D-142 a). A host looks for the word before it sends work
+that needs it, instead of finding out from an error:
+
+```js
+const runner = await createRunner({ output });
+if (!runner.info.capabilities?.includes("stdin")) refuse("This exercise needs input lines, which this runner cannot give.");
+```
+
+| Word | Since | Means |
+|---|---|---|
+| `run` | S-275 | `run(source, {...})` runs a file; `print()` and errors reach `output` |
+| `stop` | S-275 | `stop()` ends a run at once, even one stuck in `while True:`, and the next run works |
+| `stdin` | S-272 | `run(source, {stdin: [lines]})` gives the lines `input()` reads (below) |
+
+- A word is added by the story that ships it, and never removed within a version line. A runner older than S-275 has no
+  `capabilities` at all: treat that as `["run", "stop"]`.
+- Each word has checks of its own in `tools/test_runner.py`, named after it (`stdin: ...`). The suite fails if a word in the
+  list has none, or if any of them fails.
+
 ## Input lines (S-272)
 
 A host gives the lines a run reads, one string for each `input()` (D-139 a):

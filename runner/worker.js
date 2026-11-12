@@ -21,7 +21,8 @@
 //                                           answers `stopped`. Used by runner.js's `reuse` option (D-083)
 //
 //   worker -> page
-//     ready    {versions, timings, resources, fonts}   everything is installed and checked; fonts is "on open" (S-211: each font is fetched when funground first opens it)
+//     ready    {versions, capabilities, timings, resources, fonts}   everything is installed and checked; capabilities is
+//                                           CAPABILITIES (S-275); fonts is "on open" (S-211: each font is fetched when funground first opens it)
 //     started  {width, height, running}         the file ran; the canvas size it asked for (logical pixels)
 //     frame    {pixels, width, height}          RGBA bytes (physical pixels); the ArrayBuffer is transferred
 //     stepped  {running}                        the step is done; false when the sketch has ended
@@ -71,6 +72,11 @@
 // (`push_models_sound`); the names are chosen in Python.
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
+// What this runner can do, as words a host can look for in `ready` before it sends work (S-275, D-142 a). A word is added
+// by the story that ships it and never removed within a version line; tools/test_runner.py fails unless every word has
+// passing checks named after it ("stdin: ...").
+const CAPABILITIES = ["run", "stop", "stdin"];
+
 const PYODIDE_PACKAGES = ["micropip", "fonttools"];     // from the Pyodide distribution, for every run
 // onnxruntime-web, from jsDelivr at one exact version (the newest that was at least two weeks old when it was pinned: S-232, 2 November 2026).
 // The folder holds ort.wasm.mjs (the library, wasm only) and the .wasm file it loads. The runner's `onnxruntimeUrl` option replaces it.
@@ -263,7 +269,7 @@ await micropip.install(funground_wheel, deps=False)
   lap("check");
 
   const resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize, transfer: e.transferSize }));
-  post({ type: "ready", versions, timings, resources, fonts: "on open" });
+  post({ type: "ready", versions, capabilities: CAPABILITIES, timings, resources, fonts: "on open" });
 }
 
 // Python side of the worker: a few small functions, kept here so that this file is the whole worker.
