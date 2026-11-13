@@ -103,8 +103,8 @@ await runner.run('name = input("Your name? ")\nprint("Hello,", name)', { filenam
   `Your name? \nHello, Ada`; CPython given the same line in a pipe prints `Your name? Hello, Ada` (WEB-D-001).
 - When the lines run out, `input()` raises `EOFError: input() has no more lines to read: this run was given 1.`, and the run
   ends with an error, as any uncaught exception does.
-- Without `stdin`, a run behaves as before S-272: `input()` raises `OSError: [Errno 29] I/O error`. Its prompt is now shown
-  before the error (as the last output of the run, below).
+- Without `stdin`, `input()` shows its prompt, then raises `RuntimeError: Play cannot wait for typing yet. Run this on your
+  computer, or put the answer in the code.` (S-279; before, Pyodide's `OSError: [Errno 29] I/O error`).
 - Nobody types: there is no interactive input. Waiting for a person's typing inside the worker needs cross-origin isolation,
   which is a later story.
 - Output that has no newline yet, a prompt or a `print(..., end="")`, is sent when `input()` reads and when the run ends
