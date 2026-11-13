@@ -80,6 +80,9 @@
 // ml.words(mic) (S-234) is the same road for sound: a phrase goes out as float32 bytes (`phrase`), the words come back (`push_models_words`).
 // ml.sound(mic) (S-250) sends a window of sound the same way (about twice a second) and gets the model's 521 scores back as float32 bytes
 // (`push_models_sound`); the names are chosen in Python.
+// ml.teach and ml.guess (S-235) turn a picture into a vector (1,280 or 384 numbers) with the task "picture_mobilenet" or "picture_dinov2". The
+// request is the same as a picture's, but its `key` is a job number, and many jobs may be in flight: each is answered, in order. The
+// vector comes back as a Float32Array (`push_models_vector`).
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
 // What this runner can do, as words a host can look for in `ready` before it sends work (S-275, D-142 a). A word is added
@@ -628,6 +631,10 @@ def push_models_sound(session, task, key, scores):
     """Hand the sound model's 521 scores (a Float32Array) from the page to the session, as float32 bytes."""
     session.push_models_sound(task, key, scores.to_bytes())
 
+def push_models_vector(session, task, key, vector):
+    """Hand a picture's vector (a Float32Array, for ml.teach and ml.guess) from the page to the session, as float32 bytes."""
+    session.push_models_vector(task, key, vector.to_bytes())
+
 def _bare_assert_sentence(error, label, code):
     """A failed assert with no message: name the test's own line that failed (the innermost frame in the test's code)."""
     line = ""
@@ -870,7 +877,9 @@ function startModelsWorker() {
   modelsWorker.onmessage = (e) => {
     const message = e.data;
     try {
-      if (message.type === "result" && message.task === "sound") {
+      if (message.type === "result" && message.vector) {
+        if (session) py.globals.get("push_models_vector")(session, message.task, message.key, message.vector);
+      } else if (message.type === "result" && message.task === "sound") {
         if (session) py.globals.get("push_models_sound")(session, message.task, message.key, message.scores);
       } else if (message.type === "result" && message.task === "words") {
         if (session) py.globals.get("push_models_words")(session, message.task, message.key, message.text, message.score);

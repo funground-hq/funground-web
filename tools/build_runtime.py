@@ -227,6 +227,7 @@ def write_models_table(ml: Path, out: Path) -> Path:
         "models": {m.name: {"url": m.url, "file": m.file, "size": m.size, "sha256": m.sha256, "licence": m.licence}
                    for m in module.MODELS.values()},
         "tasks": {task: list(names) for task, names in module.TASKS.items()},
+        "says": dict(module.SAYS),                                     # the word a task goes by in a sentence ("picture" for both picture models)
     }
     target = out / "models.json"
     target.write_text(json.dumps(table, indent=1), encoding="utf-8")

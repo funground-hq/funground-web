@@ -1,6 +1,6 @@
 // The models worker (stories S-232, S-233, S-234, docs/design/Web_Runner_Note.md in funground): finds a body, a hand or the outline of a
-// person in a picture, the words in a phrase of sound and the name of a sound, with onnxruntime-web, so that ml.pose(cam), ml.hand(cam), ml.person(cam),
-// ml.words(mic) and ml.sound(mic) work in a page.
+// person in a picture, the words in a phrase of sound, the name of a sound and the vector of a picture, with onnxruntime-web, so that
+// ml.pose(cam), ml.hand(cam), ml.person(cam), ml.words(mic), ml.sound(mic), and ml.teach and ml.guess work in a page.
 //
 // worker.js (the one that runs Python) starts this worker the first time a sketch asks for a model. Inference takes tens of
 // milliseconds and runs here, beside the sketch, so it never holds up the sketch's step. Messages are like worker.js's.
@@ -8,7 +8,9 @@
 //   worker.js -> here
 //     init   {onnxruntimeUrl, tableUrl, glueUrl}   where onnxruntime-web is (a folder), the table of model files (models.json) and models-glue.js
 //     frame  {task, key, pixels, width, height}    find the "pose", "hand" or "person" in these RGBA bytes (an ArrayBuffer, transferred);
-//                                                  `key` is the source they came from
+//                                                  `key` is the source they came from. For "picture_mobilenet" and "picture_dinov2" (S-235)
+//                                                  the pixels are one picture to turn into a vector, and `key` is a job number, not a
+//                                                  source: many may be in flight, each is answered, in order
 //     phrase {task, key, rate, samples}            hear the "words" in this phrase, or name the "sound" in this window: `samples` is an
 //                                                  ArrayBuffer of float32 (mono, -1 to 1, transferred), `rate` how many a second; `key` is
 //                                                  the source they came from
@@ -22,6 +24,8 @@
 //     result      {task: "words", key, text, score}   the words heard ("" for none) and the mean probability of the pieces chosen
 //     result      {task: "sound", key, scores}      the 521 scores of the sound model, a Float32Array (its buffer is transferred): the mean
 //                                                  over the windows of the sound. The names are chosen in Python, not here
+//     result      {task, key, vector}                  "picture_mobilenet" and "picture_dinov2": the picture's vector, 1,280 or 384 numbers made
+//                                                  1 long, a Float32Array (its buffer is transferred); `key` is the job number sent
 //     say         {text}                           one line for the learner's output (the first download)
 //     unavailable {task, reason}                   the task cannot run (no connection for the download, a file that fails
 //                                                  its check, ...): one plain sentence
@@ -35,13 +39,15 @@
 // one that fails is downloaded again.
 
 const CACHE = "funground-models-v1";
+const PICTURES = ["picture_mobilenet", "picture_dinov2"];     // the tasks that give a vector, not points
 const post = (message, transfer = []) => postMessage(message, transfer);
 
 let settings = null;                  // {onnxruntimeUrl, tableUrl, glueUrl}
 let loaded = null;                    // Promise of {ort, glue, table}: the library, started on the first frame
 const tasks = new Map();              // task -> Promise of the task's files (two sessions for "pose" and "hand", one for "person", two sessions and the token table for "words")
 const finders = new Map();            // "task:key" -> that source's finder (it keeps the box to reuse)
-let queue = Promise.resolve();        // frames are worked on one at a time
+const pictures = new Map();           // task -> that picture model, made once (it keeps nothing between pictures)
+let queue = Promise.resolve();        // frames are worked on one at a time, in the order they came
 
 function init(message) {
   settings = message;
@@ -62,6 +68,7 @@ function library() {
       import(settings.glueUrl),
       fetch(settings.tableUrl).then((response) => response.json()),
     ]);
+    says = table.says ?? {};
     ort.env.wasm.wasmPaths = settings.onnxruntimeUrl;     // the .wasm file beside the library
     ort.env.logLevel = "error";
     return { ort, glue, table };
@@ -79,7 +86,10 @@ async function isGood(bytes, model) {
 }
 
 const megabytes = (size) => Math.max(1, Math.round(size / 1e6));
+let says = {};                        // models.json's "says": the word a learner knows a task by ("picture" for both picture models)
+const call = (task) => (PICTURES.includes(task) ? "teach" : task);         // the call a learner made: ml.teach() for both picture models
 const words = (name) => name.replace(/_/g, " ");
+const label = (name) => (says[name] ? `${says[name]} model` : words(name));
 
 function short(reason) {
   const text = String(reason?.message ?? reason).trim();
@@ -98,12 +108,12 @@ async function modelBytes(model, cache, task) {
   try {
     response = await fetch(model.url, { credentials: "omit" });
   } catch (error) {
-    throw new Error(`ml.${task}(): could not download the ${words(model.name)} from huggingface.co (${short(error)}). Run the sketch once while online; after that the browser keeps a copy.`);
+    throw new Error(`ml.${call(task)}(): could not download the ${label(model.name)} from huggingface.co (${short(error)}). Run the sketch once while online; after that the browser keeps a copy.`);
   }
-  if (!response.ok) throw new Error(`ml.${task}(): could not download '${model.url}' (the site answered ${response.status}).`);
+  if (!response.ok) throw new Error(`ml.${call(task)}(): could not download '${model.url}' (the site answered ${response.status}).`);
   const bytes = await response.arrayBuffer();
   if (!(await isGood(bytes, model))) {
-    throw new Error(`ml.${task}(): the file downloaded for the ${words(model.name)} is not the one funground expects (its checksum is different), so it was not kept. Try again. If it keeps happening, tell the funground team.`);
+    throw new Error(`ml.${call(task)}(): the file downloaded for the ${label(model.name)} is not the one funground expects (its checksum is different), so it was not kept. Try again. If it keeps happening, tell the funground team.`);
   }
   await cache.put(model.url, new Response(bytes.slice(0), { headers: { "Content-Type": "application/octet-stream" } }));
   return bytes;
@@ -122,7 +132,7 @@ function sessionsFor(task) {
       for (const model of models) if (!(await cache.match(model.url))) missing.push(model);
       if (missing.length) {
         const size = missing.reduce((sum, model) => sum + model.size, 0);
-        post({ type: "say", text: `Downloading the ${task} model, ${megabytes(size)} MB, once. After that the browser keeps a copy.` });
+        post({ type: "say", text: `Downloading the ${says[task] ?? task} model, ${megabytes(size)} MB, once. After that the browser keeps a copy.` });
       }
       const sessions = [];
       for (const model of models) {
@@ -142,6 +152,7 @@ function sessionsFor(task) {
 // ---- finding
 
 async function find({ task, key, pixels, width, height }) {
+  if (PICTURES.includes(task)) return vector({ task, key, pixels, width, height });
   try {
     const { ort, glue } = await library();
     const sessions = await sessionsFor(task);
@@ -155,6 +166,19 @@ async function find({ task, key, pixels, width, height }) {
     }
     const points = found === null ? null : found.points;
     post({ type: "result", task, key, points, score: found === null ? 0 : found.score, width, height }, points ? [points.buffer] : []);
+  } catch (error) {
+    post({ type: "unavailable", task, reason: errorSentence(task, error) });
+  }
+}
+
+/** A picture's vector, for ml.teach and ml.guess. The job number `key` comes back with the answer. */
+async function vector({ task, key, pixels, width, height }) {
+  try {
+    const { ort, glue } = await library();
+    const files = await sessionsFor(task);
+    if (!pictures.has(task)) pictures.set(task, glue.createPicture(ort, files, task));
+    const numbers = await pictures.get(task).vector({ rgba: new Uint8Array(pixels), width, height });
+    post({ type: "result", task, key, vector: numbers }, [numbers.buffer]);
   } catch (error) {
     post({ type: "unavailable", task, reason: errorSentence(task, error) });
   }
@@ -187,7 +211,7 @@ async function hear({ task, key, rate, samples }) {
 // file would not open) is made into one.
 function errorSentence(task, error) {
   const text = String(error?.message ?? error);
-  return text.startsWith(`ml.${task}()`) ? text : `ml.${task}(): the browser could not run the ${task} model (${short(error)}).`;
+  return text.startsWith(`ml.${call(task)}()`) ? text : `ml.${call(task)}(): the browser could not run the ${says[task] ?? task} model (${short(error)}).`;
 }
 
 const handlers = {
