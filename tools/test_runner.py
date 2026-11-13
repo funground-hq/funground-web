@@ -370,8 +370,10 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
         checks["stdin: a last line without a newline is sent when the run ends, and not with the next run"] = (
             texts(stdin["partial"]) == ["a", "no newline"] and texts(stdin["next"]) == ["next run"])
         none = texts(stdin["none"])
-        checks["stdin: without stdin input() raises OSError as before, after its prompt (a reused worker forgets the lines)"] = (
-            none[:2] == ["before", "Your name? "] and "OSError: [Errno 29] I/O error" in none[-1])
+        checks["stdin: without stdin input() shows its prompt, then one plain sentence (S-279; a reused worker forgets the lines)"] = (
+            none[:2] == ["before", "Your name? "]
+            and "RuntimeError: Play cannot wait for typing yet. Run this on your computer, or put the answer in the code." in none[-1]
+            and "OSError" not in none[-1] and "<runner>" not in none[-1] and "<exec>" not in none[-1])
         checks["stdin: stdin that is not a list of strings gives one clear error"] = (
             stdin["bad"]["ok"] is False and any("stdin must be a list of strings" in t for t in texts(stdin["bad"])))
     check = scenarios.get("checks")
@@ -401,7 +403,8 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             check["syntax"]["tests"] == [] and 'File "main.py", line 1' in check["syntax"]["error"]
             and "SyntaxError" in check["syntax"]["error"])
         checks["check: input() with no lines given raises in the learner's code, as a plain run does"] = (
-            check["noInput"]["tests"] == [] and "OSError" in check["noInput"]["error"] and 'File "main.py", line 1' in check["noInput"]["error"])
+            check["noInput"]["tests"] == [] and "RuntimeError: Play cannot wait for typing yet." in check["noInput"]["error"]
+            and 'File "main.py", line 1' in check["noInput"]["error"])
         runs_out = check["runsOut"]
         checks["check: input lines running out give the plain EOFError sentence, with no frame of the runner's"] = (
             runs_out["tests"] == [] and runs_out["output"] == "A? B? "
