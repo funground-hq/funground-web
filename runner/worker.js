@@ -182,11 +182,11 @@ function flushOutput() {
 // Input lines (S-272, D-139 a). With `stdin`, input() and sys.stdin read the run's lines in order; Pyodide adds the newline
 // that input() takes off. Before each read the output is flushed, so input()'s prompt reaches the page first. When the lines
 // run out, input() raises EOFError with one plain sentence (`use_input_lines` in the glue). Without `stdin`, Pyodide's own
-// stdin is put back: input() raises OSError [Errno 29], as before S-272.
+// stdin is put back and input() raises one plain sentence (S-279) instead of its OSError [Errno 29].
 function setInputLines(stdin) {
   if (stdin === undefined || stdin === null) {
     py.setStdin();
-    py.globals.get("use_input_lines")(null);
+    py.globals.get("use_input_lines")();          // no argument: None in Python (a JS null would arrive as jsnull)
     return;
   }
   if (!Array.isArray(stdin) || stdin.some((line) => typeof line !== "string" || line.includes("\n"))) {
@@ -560,11 +560,19 @@ def read_wheel_metadata(data):
             requires.append(found.group(1))
     return json.dumps({"version": fields.get("Version", ""), "requires": requires})
 
-def use_input_lines(count):
+NO_INPUT_LINES = "Play cannot wait for typing yet. Run this on your computer, or put the answer in the code."
+
+def use_input_lines(count=None):
     """S-272: with count lines given (setInputLines), input() raises one plain sentence when they run out instead of
-    CPython's "EOF when reading a line"; with None, the built-in input() is put back."""
+    CPython's "EOF when reading a line". S-279: with None (no lines given), input() shows its prompt and raises
+    RuntimeError with one plain sentence, instead of Pyodide's "OSError: [Errno 29] I/O error"."""
     if count is None:
-        builtins.input = _builtin_input
+        def input(prompt=""):
+            sys.stdout.write(str(prompt))
+            sys.stdout.flush()
+            raise RuntimeError(NO_INPUT_LINES)
+
+        builtins.input = input
         return
 
     def input(prompt=""):
