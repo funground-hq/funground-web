@@ -1,7 +1,7 @@
 # funground VS Code extension: test results (story S-158)
 
 Measured on 9 and 10 October 2026, on the maintainer's Windows machine (slow, little memory). Raw numbers:
-`test/out/<label>/report.json` (git-ignored). The spike's results are in `../spikes/S-156_RESULTS.md`.
+`test/out/<label>/report.json` (git-ignored).
 
 ## Environment
 

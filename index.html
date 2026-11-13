@@ -45,7 +45,6 @@
     <tr><td><code>runner/</code></td><td>The browser runner: <code>runner.js</code> (the page side), <code>worker.js</code> (Python in a module worker), sound, microphone, camera and models. <a href="runner/README.md">How a page uses it</a></td></tr>
     <tr><td><code>vscode-extension/</code></td><td>A VS Code extension that runs a sketch in a panel beside the editor, on the desktop and in github.dev</td></tr>
     <tr><td><code>tools/</code></td><td>Builds the runtime (<code>build_runtime.py</code>) and tests the runner in headless Chrome</td></tr>
-    <tr><td><code>spikes/</code></td><td>Time-boxed experiments and their results, for example <a href="spikes/S-271/RESULTS.md">S-271, plain Python in the runner</a></td></tr>
   </table>
 
   <h2>Quick usage guide</h2>
@@ -84,7 +83,7 @@ f.run()`;
   </ol>
 
   <h2>Try it without building</h2>
-  <p><a href="spikes/S-271/phone.html">The S-271 phone check</a> loads Pyodide alone (no funground), and runs a short
+  <p><a href="phone-check.html">The phone check</a> loads Pyodide alone (no funground), and runs a short
   plain Python script, then shows how long it took. It works on a phone too.</p>
 
   <p class="muted">Part of funground 0.2's web target. Licence: see <a href="LICENSE">LICENSE</a>.</p>

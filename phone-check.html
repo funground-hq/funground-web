@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S-271 phone check</title>
+<!-- The phone check (from spike S-271, criterion 4). One file: the worker is made from a blob, Pyodide alone comes from jsDelivr, nothing else is
+     fetched. Open it on the phone (Chrome, mobile data, Wi-Fi off), wait for "ready", press Run, read the numbers out. -->
+<style>
+  :root { --bg: #fdfbf6; --fg: #1d1d1b; --muted: #6b6a64; --ok: #23683f; --bad: #a33a2a; --box: #f1ede3; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161614; --fg: #ecebe6; --muted: #a09f98; --ok: #6cc28c; --bad: #ee8a78; --box: #23221f; } }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, sans-serif; }
+  h1 { font-size: 1.2rem; margin: 0 0 12px; }
+  .big { font-size: 1.6rem; font-weight: 600; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); font-size: .9rem; }
+  button { font: inherit; padding: 10px 18px; margin: 12px 0; }
+  pre { background: var(--box); padding: 10px; white-space: pre-wrap; word-break: break-word; font-size: .85rem; }
+</style>
+</head>
+<body>
+<h1>S-271: Pyodide alone on this phone</h1>
+<div id="status" class="big">Loading Python…</div>
+<div id="detail" class="muted"></div>
+<button id="run" disabled>Run the script</button>
+<div id="ran" class="big"></div>
+<pre id="out"></pre>
+<script>
+const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/";
+const SCRIPT = `import math, random, string
+random.seed(2026)
+print("Hello from a plain script on a phone")
+print(sum(i * i for i in range(1, 11)), math.factorial(20), round(math.pi, 6))
+print(random.randint(1, 6), random.choice(["red", "green", "blue"]))
+print(string.capwords("plain python in the browser"))
+for n in range(3):
+    print("line", n)
+`;
+const WORKER = `
+let py;
+self.onmessage = async (e) => {
+  if (e.data.type === "init") {
+    const { loadPyodide } = await import("${PYODIDE}pyodide.mjs");
+    py = await loadPyodide({ indexURL: "${PYODIDE}", stdout: (text) => postMessage({ type: "output", text }), stderr: (text) => postMessage({ type: "output", text }) });
+    const bytes = performance.getEntriesByType("resource").reduce((s, r) => s + r.transferSize, 0);
+    postMessage({ type: "ready", bytes, version: py.version });
+  } else {
+    const t = performance.now();
+    try { py.runPython(e.data.source); } catch (error) { postMessage({ type: "output", text: String(error.message) }); }
+    postMessage({ type: "done", ms: Math.round(performance.now() - t) });
+  }
+};`;
+const $ = (id) => document.getElementById(id);
+const connection = navigator.connection ? `${navigator.connection.effectiveType ?? "?"}, about ${navigator.connection.downlink ?? "?"} Mbit/s (the browser's estimate)` : "connection type not reported";
+$("detail").textContent = `${connection}. ${navigator.userAgent}`;
+const start = performance.now();
+const worker = new Worker(URL.createObjectURL(new Blob([WORKER], { type: "text/javascript" })), { type: "module" });
+let runStart = 0;
+worker.onerror = (e) => { $("status").textContent = `Failed: ${e.message}`; $("status").className = "big bad"; };
+worker.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === "ready") {
+    const seconds = ((performance.now() - start) / 1000).toFixed(1);
+    $("status").textContent = `Ready in ${seconds} s`;
+    $("status").className = "big ok";
+    $("detail").textContent = `${(m.bytes / 1e6).toFixed(1)} MB transferred, Pyodide ${m.version}. ${$("detail").textContent}`;
+    $("run").disabled = false;
+  } else if (m.type === "output") {
+    $("out").textContent += m.text + "\n";
+  } else if (m.type === "done") {
+    $("ran").textContent = `Script ran in ${m.ms} ms (${Math.round(performance.now() - runStart)} ms with messages)`;
+  }
+};
+worker.postMessage({ type: "init" });
+$("run").onclick = () => { $("out").textContent = ""; runStart = performance.now(); worker.postMessage({ type: "run", source: SCRIPT }); };
+</script>
+</body>
+</html>

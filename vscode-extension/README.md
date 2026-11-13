@@ -167,5 +167,4 @@ the saved frames byte for byte against funground's golden images. The numbers: `
   running. Run such sketches on the funground website or on your computer.
 - Chrome first. Other browsers are not tried.
 - Sound needs a click or a key press in the editor first (the browser's rule); typing counts.
-- The extension is not published to a marketplace. Marketplace publishing is the maintainer's act (see
-  `../spikes/S-156_RESULTS.md`, Q5).
+- The extension is not published to a marketplace. Marketplace publishing is the maintainer's act.

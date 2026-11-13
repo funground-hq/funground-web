@@ -61,7 +61,7 @@ Nothing is stubbed. Design: `docs/design/Web_Runner_Note.md` in funground (story
 | `run(source, {stdin})` (S-272) | none | The lines `input()` reads, as a list of strings (see "Input lines" below). |
 
   A runner whose files are on another origin (a VS Code webview loads them from its resource origin) starts its worker from a
-  `blob:` URL. Results: `spikes/S-156_RESULTS.md`, `vscode-extension/RESULTS.md`.
+  `blob:` URL. Results: `vscode-extension/RESULTS.md`.
 - Beside the sketch. Each run gets a fresh working folder, which is also first on Python's import path (as the sketch's own
   folder is under `python sketch.py`). `run(..., {files})` writes into it, so `files` can hold data (`data/photo.png`) and
   other `.py` files the sketch imports (`helpers.py`); modules imported that way are forgotten when the run stops, so an
@@ -273,7 +273,7 @@ const runner = await createRunner({
   imports numpy waits for it; later runs do not.
 - **`install: "at start"`.** Everything listed is loaded before `ready`, so `createRunner` takes longer and the first Run takes no extra time. Use it
   for heavy packages: importing scikit-learn alone takes 7 to 10 s even when its files are cached.
-- **What a run costs** (spike S-276, `spikes/S-276/RESULTS.md` on the branch `spike/s276-packages`, one laptop, medians of three, with the caveats there): numpy adds about 3 MB and
+- **What a run costs** (spike S-276, one laptop, medians of three, with the caveats there): numpy adds about 3 MB and
   1 s to a start. scikit-learn adds about 18.5 MB (scipy is 14 MB of it) and takes 20 to 50 s on a first visit, over a fast connection or
   a slow one; warm, 4 s to load and 8 s to import it. Serve the files compressed: the `.wasm` goes from 9.6 MB to 3.4 MB.
 - **A name Pyodide does not have** (`packages: ["pandsa"]`) makes `createRunner` reject: `"pandsa" is not a package Pyodide has, so this page cannot offer it.`
