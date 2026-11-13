@@ -596,3 +596,124 @@ export function createSound(ort, [session]) {
     },
   };
 }
+
+// ---- the pictures: MobileNetV4-small and DINOv2-small (story S-235)
+//
+// The JavaScript twin of funground-ml's `_pictures.py`, for the "picture_mobilenet" and "picture_dinov2" tasks that ml.teach and
+// ml.guess use. A picture becomes a vector (a list of numbers) and Python compares vectors. The recipe is the usual one for
+// ImageNet models, as spike 23 (and then spike 24, in a page) measured it against the desktop: scale the picture so that its
+// shorter side is 256, cut out the middle 224 x 224, then 0 to 1, minus ImageNet's mean and over its spread, channels first.
+// MobileNetV4's vector is its output's first row (1,280 numbers), DINOv2's is the first token (384 numbers); both are made
+// 1 long. The scaling reproduces Pillow's `resize(..., BICUBIC)` so that the numbers are the desktop's, to a cosine of 0.99+.
+
+const PICTURE_SIZE = 224, PICTURE_SHORT_SIDE = 256;
+const IMAGENET_MEAN = [0.485, 0.456, 0.406], IMAGENET_SPREAD = [0.229, 0.224, 0.225];
+const PICTURE_VECTOR_LENGTH = { picture_mobilenet: 1280, picture_dinov2: 384 };
+
+/** Python's `round`: halves go to the even whole number (JavaScript's `Math.round` takes them up). */
+function roundHalfEven(x) {
+  const floor = Math.floor(x), rest = x - floor;
+  if (rest === 0.5) return floor % 2 === 0 ? floor : floor + 1;
+  return Math.round(x);
+}
+
+/** Pillow's bicubic kernel (a = -0.5). */
+function bicubic(x) {
+  const a = -0.5;
+  x = Math.abs(x);
+  if (x < 1) return ((a + 2) * x - (a + 3)) * x * x + 1;
+  if (x < 2) return (((x - 5) * x + 8) * x - 4) * a;
+  return 0;
+}
+
+/**
+ * The weights for resizing one line of `inSize` pixels to `outSize` with Pillow's bicubic filter (its `precompute_coeffs`): a
+ * kernel twice as wide as one output pixel is when enlarging, and as wide as the input pixels it covers when shrinking. Only
+ * the output pixels `from` up to `to` are made. Returns, for each, where its input pixels start and their weights (adding up to 1).
+ */
+function bicubicWeights(inSize, outSize, from, to) {
+  const scale = inSize / outSize, filterScale = Math.max(scale, 1), support = 2 * filterScale;
+  return Array.from({ length: to - from }, (_, n) => {
+    const centre = (from + n + 0.5) * scale;
+    const start = Math.max(Math.trunc(centre - support + 0.5), 0), end = Math.min(Math.trunc(centre + support + 0.5), inSize);
+    const weights = [];
+    let total = 0;
+    for (let x = start; x < end; x++) {
+      const weight = bicubic((x - centre + 0.5) / filterScale);
+      weights.push(weight);
+      total += weight;
+    }
+    return { start, weights: weights.map((weight) => (total ? weight / total : 0)) };
+  });
+}
+
+const toByte = (value) => Math.min(Math.max(Math.round(value), 0), 255);
+
+/**
+ * The RGB bytes of the window `left`, `top`, `size` x `size` of the picture scaled to scaledWidth x scaledHeight. The picture is
+ * resized across and then down, each rounded to a whole number between the two as Pillow does for 8-bit pictures. Pillow
+ * scales the whole picture and the window is cut from that; the passes work on one pixel at a time, so making only the window's
+ * pixels gives the same numbers.
+ */
+function scaledWindow({ rgba, width, height }, scaledWidth, scaledHeight, left, top, size) {
+  const across = bicubicWeights(width, scaledWidth, left, left + size), down = bicubicWeights(height, scaledHeight, top, top + size);
+  const first = down[0].start, last = down[size - 1].start + down[size - 1].weights.length;     // the rows the second pass reads
+  const wide = new Uint8Array(size * (last - first) * 3);
+  for (let y = first; y < last; y++) {
+    for (let x = 0; x < size; x++) {
+      const { start, weights } = across[x];
+      for (let channel = 0; channel < 3; channel++) {
+        let sum = 0;
+        for (let k = 0; k < weights.length; k++) sum += rgba[(y * width + start + k) * 4 + channel] * weights[k];
+        wide[((y - first) * size + x) * 3 + channel] = toByte(sum);
+      }
+    }
+  }
+  const out = new Uint8Array(size * size * 3);
+  for (let y = 0; y < size; y++) {
+    const { start, weights } = down[y];
+    for (let x = 0; x < size; x++) {
+      for (let channel = 0; channel < 3; channel++) {
+        let sum = 0;
+        for (let k = 0; k < weights.length; k++) sum += wide[((start + k - first) * size + x) * 3 + channel] * weights[k];
+        out[(y * size + x) * 3 + channel] = toByte(sum);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The model's input for a picture: a Float32Array of 3 x 224 x 224 (channels first). The shorter side is scaled to 256 (the other
+ * side by the same factor, rounded as Python's `round` does), the middle 224 x 224 is cut out, then 0 to 1, minus ImageNet's mean,
+ * over its spread. The picture's alpha is ignored: Python has made see-through pixels black already.
+ */
+export function pictureTensor(picture) {
+  const { width, height } = picture, shortest = Math.min(width, height);
+  const scaledWidth = roundHalfEven(width * PICTURE_SHORT_SIDE / shortest), scaledHeight = roundHalfEven(height * PICTURE_SHORT_SIDE / shortest);
+  const left = Math.floor((scaledWidth - PICTURE_SIZE) / 2), top = Math.floor((scaledHeight - PICTURE_SIZE) / 2);
+  const rgb = scaledWindow(picture, scaledWidth, scaledHeight, left, top, PICTURE_SIZE);
+  const plane = PICTURE_SIZE * PICTURE_SIZE, input = new Float32Array(3 * plane);
+  for (let i = 0; i < plane; i++) {
+    for (let channel = 0; channel < 3; channel++) input[channel * plane + i] = (rgb[i * 3 + channel] / 255 - IMAGENET_MEAN[channel]) / IMAGENET_SPREAD[channel];
+  }
+  return input;
+}
+
+/**
+ * A picture model from its session (the one file of the task in models.json). `vector(picture)` gives a Float32Array 1 long:
+ * 1,280 numbers for "picture_mobilenet" (output 0, row 0), 384 for "picture_dinov2" (output 0 at [0, 0], the first token). The
+ * session keeps nothing between pictures.
+ */
+export function createPicture(ort, [session], task) {
+  const length = PICTURE_VECTOR_LENGTH[task];
+  return {
+    async vector(picture) {
+      const input = new ort.Tensor("float32", pictureTensor(picture), [1, 3, PICTURE_SIZE, PICTURE_SIZE]);
+      const output = (await session.run({ [session.inputNames[0]]: input }))[session.outputNames[0]];
+      const numbers = Float64Array.from(output.data.subarray(0, length));       // the first row, or the first token
+      const norm = Math.hypot(...numbers);
+      return Float32Array.from(numbers, (value) => value / norm);
+    },
+  };
+}

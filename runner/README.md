@@ -364,7 +364,7 @@ not loaded. Design and message list: `docs/design/Web_Runner_Note.md` in fungrou
 
 ### Try the sound (for a person, with ears)
 
-Serve the repository (`C:\Projects\playground\.venv\Scripts\python.exe -m http.server` from its root), open
+Serve the repository (`C:\Projects\playground\.venv\Scripts\python.exe tools/serve.py` from its root), open
 `/runner/demo.html` in Chrome and pick an example (the sound ones are in the list).
 
 1. `sound-02_write_a_tune`: press Run. You should hear a tune with a soft pad under it, starting at once, in tune and
@@ -384,7 +384,8 @@ drawing should not touch the audio); and a microphone that comes back out of the
 
 ## Demo, tests
 
-- `runner/demo.html`: serve the repository root with the venv's `python -m http.server` and open `/runner/demo.html`.
+- `runner/demo.html`: serve the repository with `tools/serve.py` (the venv's Python) and open `/runner/demo.html`.
+  Not `python -m http.server`: on Windows it can cut a large wheel short, and Python never loads.
 - `tools/test_runner.py --funground <checkout>`: headless Chrome, Session 1 and gallery examples against the goldens
   (byte for byte at 1x), Stop, errors, events, fonts on demand (request counts), saved files (`onFile`), and the host's packages (S-276: numpy and
   scikit-learn from Pyodide, small wheels built with `zipfile` and served from `tests/out/wheels/`; it needs the network for Pyodide's packages). Reports in `tests/out/` (git-ignored). `--dpr 1.25` checks a fractional

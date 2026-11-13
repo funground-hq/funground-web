@@ -1,4 +1,4 @@
-r"""Test ml.pose(), ml.hand(), ml.person(), ml.words() and ml.sound() in the browser runner, in headless Chrome (stories S-232, S-233, S-234, S-250).
+r"""Test ml.pose(), ml.hand(), ml.person(), ml.words(), ml.sound(), ml.teach() and ml.guess() in the browser runner, in headless Chrome (stories S-232, S-233, S-234, S-250, S-235).
 
     C:\Projects\playground\.venv\Scripts\python.exe tools/test_models.py --ml-python <python with funground-ml> [--funground C:\Projects\playground] [--live]
 
@@ -41,6 +41,14 @@ can play the desktop). What this does not test: a real microphone.
 The recordings go through sound.load() (S-259), so this also checks that a file read in a page has the desktop's samples: the files are
 at 16 kHz, and the sound model tells the two apart when they differ.
 
+Teaching (S-235) is a picture turned into a vector, with MobileNetV4-small and with DINOv2-small. tests/runner/models_teach_sketch.py teaches
+two photographs of ml/tests/data (gandhi_london_rain.jpg as "gandhi", standing_woman_640.jpg as "woman") with ml.teach, asks ml.guess for each
+picture, and prints the guesses and the vector made for the first photograph (read from the sketch's taught set, the same way on both sides).
+On the desktop that runs funground-ml's _pictures.py (Pillow, numpy and onnxruntime), in the browser the models worker does the same sums in
+JavaScript (the resizing reproduces Pillow's bicubic). The test passes when Play names each photograph rightly (after some None answers, which
+are counted) and the cosine of the two vectors is at least VECTOR_COSINE_BOUND (0.99; spike 24 measured 0.996 for DINOv2). Reading the vector
+from the sketch's own taught set, and not from a separate page, tests the whole road: the request, the page's maths, the answer.
+
 Cases, run in one Chrome (one temporary profile, so Cache Storage carries over from case to case):
 
   * pose, hand: empty cache. One line "Downloading the {task} model, {n} MB, once. After that the browser keeps a copy.", the
@@ -56,6 +64,8 @@ Cases, run in one Chrome (one temporary profile, so Cache Storage carries over f
     the model site, no line, the same words), and the real-time factor.
   * sound: the three recordings' names (one file, one download line), compared with the desktop's; then from the copy (no request to the
     model site, no line, the same names), and the real-time factor; then the fake microphone.
+  * teach mobilenet, teach dinov2: empty cache. One line "Downloading the picture model, {n} MB, once. ..." each, one file each, both photographs
+    named rightly, the vector compared with the desktop's.
   * speed: answers a second for each task on this machine, with a new picture every frame.
 
 The model site is answered from ml/tests/.models by tools/chrome_page.mjs (the real files, with the real site's headers); --live
@@ -89,6 +99,9 @@ TOLERANCE_PX = 5.0
 PHOTOS = {"pose": "gandhi_london_rain.jpg", "hand": "standing_woman_640.jpg", "person": "standing_woman_640.jpg", "words": "tts.wav"}
 SIZE_MB = {"pose": 18, "hand": 8, "person": 1, "words": 42, "sound": 16}
 FILES = {"pose": 2, "hand": 2, "person": 1, "words": 3, "sound": 1}          # model files a task downloads
+TEACH_PHOTOS = {"gandhi": "gandhi_london_rain.jpg", "woman": "standing_woman_640.jpg"}      # name -> file, in ml/tests/data
+TEACH_MODELS = {"mobilenet": 10, "dinov2": 24}       # the model the sketch asks for -> the MB its download line says
+VECTOR_COSINE_BOUND = 0.99                           # the least cosine between the browser's vector and the desktop's
 ALPHA_MEAN_BOUND = 3.0                               # grey levels (of 255): the mean absolute difference of the two alpha planes
 ALPHA_SHARE_LEVEL = 32                               # a pixel counts as different when its alpha differs by more than this ...
 ALPHA_SHARE_BOUND = 0.01                             # ... and at most this share of the pixels may count
@@ -99,6 +112,33 @@ ORT_FOLDER = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/"
 
 
 # ---- the desktop's numbers
+
+def teach_text(model: str) -> str:
+    return f"MODEL = {model!r}\nPHOTOS = {TEACH_PHOTOS!r}\n" + (SKETCHES / "models_teach_sketch.py").read_text(encoding="utf-8")
+
+
+def parse_teach(lines: list[str]) -> dict | None:
+    """The object a teach sketch printed after "teach ", or None when it printed "teach none" or nothing."""
+    return parse_json_line(lines, "teach")
+
+
+def desktop_teach(ml_python: str, funground: Path, hf_dir: Path, model: str) -> dict:
+    """Run the teach sketch on the desktop (python sketch.py, headless: funground-ml's _pictures.py) and return what it printed."""
+    with tempfile.TemporaryDirectory(prefix="models_desktop_") as folder:
+        folder = Path(folder)
+        (folder / "sketch.py").write_text(teach_text(model) + "\nf.run()\n", encoding="utf-8")
+        for photo in TEACH_PHOTOS.values():
+            (folder / photo).write_bytes((funground / "ml" / "tests" / "data" / photo).read_bytes())
+        env = dict(os.environ, FUNGROUND_HEADLESS="1", FUNGROUND_ML_MODELS=str(hf_dir))
+        done = subprocess.run([ml_python, "sketch.py"], cwd=folder, env=env, capture_output=True, text=True, timeout=600)
+    found = parse_teach(done.stdout.splitlines())
+    if found is None:
+        raise SystemExit(f"the desktop taught nothing with {model} (exit {done.returncode}): {done.stdout[-500:]} {done.stderr[-800:]}")
+    return found
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b)) / (math.hypot(*a) * math.hypot(*b))
 
 def sketch_text(name: str, task: str) -> str:
     heading = f'SOUND = "{PHOTOS[task]}"\n' if task == "words" else f'TASK = "{task}"\nPHOTO = "{PHOTOS[task]}"\n'
@@ -276,6 +316,10 @@ def cases(data: Path) -> list[dict]:
         files = {clip: base64.b64encode((data / clip).read_bytes()).decode() for clip in SOUND_CLIPS}
         return {"id": case_id, "source": sound_text("models_sound_sketch.py"), "files": files, "until_output": "^speed ", "wait_s": 300, **extra}
 
+    def teach_case(model: str, **extra) -> dict:
+        files = {photo: base64.b64encode((data / photo).read_bytes()).decode() for photo in TEACH_PHOTOS.values()}
+        return {"id": f"teach {model}", "source": teach_text(model), "files": files, "until_output": "^teach ", "wait_s": 300, **extra}
+
     points = "^points "
     return [
         case("pose", "models_sketch.py", "pose", points, clear_cache=True),
@@ -290,6 +334,8 @@ def cases(data: Path) -> list[dict]:
         sound_case("sound from the copy", data, hf="offline"),
         {"id": "sound microphone", "source": (SKETCHES / "models_microphone_sketch.py").read_text(encoding="utf-8"), "files": {},
          "until_output": "^microphone ", "wait_s": 120, "hf": "offline"},
+        teach_case("mobilenet", clear_cache=True),
+        teach_case("dinov2", clear_cache=True),
         case("no connection and no copy", "models_sketch.py", "pose", "could not download", hf="offline", clear_cache=True),
         case("wrong bytes", "models_sketch.py", "pose", "checksum", hf="corrupt", clear_cache=True),
         case("speed, pose", "models_speed_sketch.py", "pose", "^speed", wait_s=300, clear_cache=True),
@@ -441,6 +487,32 @@ def problems_sound(result: dict, desktop: list[dict], copy: bool) -> tuple[list[
     return out, numbers
 
 
+def problems_teach(result: dict, model: str, desktop: dict) -> tuple[list[str], dict]:
+    out = [f"error: {result['error']}"] if "error" in result else []
+    out += stderr_problems(result)
+    lines = stdout_lines(result)
+    line = DOWNLOAD_LINE.format(task="picture", mb=TEACH_MODELS[model])
+    if lines.count(line) != 1:
+        out.append(f"expected the line {line!r} exactly once, got {[l for l in lines if 'Downloading' in l]}")
+    asked = model_requests(result)
+    if len(asked) != 1 or any(r["status"] != 200 for r in asked):
+        out.append(f"expected 1 good request to the model site, got {asked}")
+    found = parse_teach(lines)
+    if found is None:
+        return out + [f"no photograph was named in the browser: {lines[-3:]}"], {}
+    for name in TEACH_PHOTOS:
+        if found["guesses"].get(name) != name:
+            out.append(f"Play named the photograph taught as {name!r} {found['guesses'].get(name)!r}")
+    numbers = {"nones_play": found["nones"], "nones_desktop": desktop["nones"], "length": len(found["vector"])}
+    if len(found["vector"]) != len(desktop["vector"]):
+        out.append(f"the vectors have different lengths: desktop {len(desktop['vector'])}, Play {len(found['vector'])}")
+    else:
+        numbers["cosine"] = round(cosine(desktop["vector"], found["vector"]), 5)
+        if numbers["cosine"] < VECTOR_COSINE_BOUND:
+            out.append(f"the vector differs from the desktop's: cosine {numbers['cosine']} (the least is {VECTOR_COSINE_BOUND})")
+    return out, numbers
+
+
 def problems_microphone(result: dict) -> tuple[list[str], dict]:
     out = [f"error: {result['error']}"] if "error" in result else []
     out += stderr_problems(result)
@@ -583,11 +655,14 @@ def main() -> int:
     desktop_named = desktop_sound(args.ml_python, args.funground, hf_dir)
     print("desktop sound:", [(row["clip"], row["name"], [g["name"] for g in row["next"]]) for row in desktop_named], flush=True)
 
+    desktop_taught = {model: desktop_teach(args.ml_python, args.funground, hf_dir, model) for model in TEACH_MODELS if args.only is None or args.only in f"teach {model}"}
+    print("desktop teach:", {model: (found["guesses"], len(found["vector"])) for model, found in desktop_taught.items()}, flush=True)
+
     wanted = [c for c in cases(args.funground / "ml" / "tests" / "data") if not (args.skip_speed and c["id"].startswith("speed"))
               and (args.only is None or args.only in c["id"])]
     if args.live:
         for c in wanted:
-            if c["id"] in ("pose", "hand", "person", "words", "sound"):
+            if c["id"] in ("pose", "hand", "person", "words", "sound", "teach mobilenet", "teach dinov2"):
                 c["hf"] = "live"
     report = run_page(wanted, hf_dir, args.live, args.timeout, kept_names(args.funground))
     results = {r["id"]: r for r in report.get("cases", [])}
@@ -619,6 +694,10 @@ def main() -> int:
         if case_id in results:
             found, summary[case_id] = problems_sound(results[case_id], desktop_named, copy)
             check(case_id, found)
+    for model in TEACH_MODELS:
+        if f"teach {model}" in results:
+            found, summary[f"teach {model}"] = problems_teach(results[f"teach {model}"], model, desktop_taught[model])
+            check(f"teach {model}", found)
     if "sound microphone" in results:
         found, summary["sound microphone"] = problems_microphone(results["sound microphone"])
         check("sound microphone", found)
@@ -647,7 +726,7 @@ def main() -> int:
     summary["speed"] = speeds
     summary["hosts"] = hosts_seen
     summary["failures"] = sorted(set(failures))
-    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop, "desktop_words": desktop_heard, "desktop_sound": desktop_named,
+    (out / "models_report.json").write_text(json.dumps({"summary": summary, "report": report, "desktop": desktop, "desktop_words": desktop_heard, "desktop_sound": desktop_named, "desktop_teach": desktop_taught,
                                                         "desktop_person": {k: v for k, v in desktop_person.items() if k != "plane"}}, indent=1),
                                             encoding="utf-8")
     print(json.dumps(summary, indent=1))
