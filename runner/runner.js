@@ -36,6 +36,9 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   (f.save, save_gif, a plain open() ...): new or changed since the run began (a file passed in `files` only when the sketch rewrites it). Called after the frame (or
  *   script, or stop) that wrote it, and again if the sketch writes it again. `name` is relative to the sketch's folder, `bytes` is
  *   the whole file and `type` its MIME type ("image/png", "application/pdf", "image/svg+xml", "image/gif", "video/mp4")
+ * @param {(info: {task: string, word: string, state: "downloading" | "starting" | "ready" | "failed", done?: number, total?: number, reason?: string}) => void} [options.onModel]
+ *   where a model is, so a page can say why a sketch waits (S-307): `word` is the learner's word for it ("hand"); "downloading" has `done` of `total`
+ *   bytes; "starting" is the seconds after the files are here; "failed" has `reason`, a plain sentence
  * @param {string | URL} [options.pyodideUrl]  the folder Pyodide loads from (default: jsDelivr, in worker.js)
  * @param {string | URL} [options.onnxruntimeUrl]  the folder onnxruntime-web loads from, for ml.pose() and ml.hand() (default: jsDelivr at one
  *   exact version, in worker.js). It holds ort.wasm.mjs and the .wasm file beside it
@@ -62,7 +65,7 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
  * @returns {Promise<{info: object, run: Function, check: Function, stop: Function, keep: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, onModel, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
   // S-274, S-276, D-144 e: what `packages` and `install` may hold. Checked first, before anything is made.
   const hostPackages = checkedPackages(packages, install, baseUrl);
   const write = outputWriter(output);
@@ -174,6 +177,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
       case "kept": keeping.get(message.id)?.(message); break;
       case "file": onFile?.({ name: message.name, bytes: new Uint8Array(message.bytes), type: message.mime }); break;   // even after the run ended: its last frame may have saved
+      case "model": onModel?.({ task: message.task, word: message.word, state: message.state, done: message.done, total: message.total, reason: message.reason }); break;
       case "microphone": audio.microphoneCommand(message); break;
       case "camera": if (run) camera.command(message); break;
       case "started": started(message); break;

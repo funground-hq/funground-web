@@ -898,6 +898,8 @@ function startModelsWorker() {
         if (session) py.globals.get("push_models")(session, message.task, message.key, message.points ?? undefined, message.score, message.width, message.height);
       } else if (message.type === "say") {
         post({ type: "output", stream: "stdout", text: message.text });
+      } else if (message.type === "model") {
+        post(message);                      // the page's status line: downloading, starting, ready, failed
       } else if (message.type === "unavailable") {
         session?.models_unavailable(message.task, message.reason);
       }

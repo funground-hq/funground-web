@@ -27,6 +27,10 @@
 //     result      {task, key, vector}                  "picture_mobilenet" and "picture_dinov2": the picture's vector, 1,280 or 384 numbers made
 //                                                  1 long, a Float32Array (its buffer is transferred); `key` is the job number sent
 //     say         {text}                           one line for the learner's output (the first download)
+//     model       {task, word, state, done, total, reason}   where a model is, for a page's status line: `word` is the learner's word
+//                                                  for it ("hand"). `state` is "downloading" (`done` of `total` bytes, at most four times a
+//                                                  second), "starting" (the files are here, the sessions are being made: seconds), "ready", or
+//                                                  "failed" (`reason` is the same sentence `unavailable` carries)
 //     unavailable {task, reason}                   the task cannot run (no connection for the download, a file that fails
 //                                                  its check, ...): one plain sentence
 //
@@ -96,8 +100,36 @@ function short(reason) {
   return (text || "unknown error").slice(0, 80);
 }
 
-/** The bytes of a model file: the checked copy in Cache Storage, or a download (checked, then kept). */
-async function modelBytes(model, cache, task) {
+const PROGRESS_MS = 250;              // a download reports at most four times a second
+
+/** What a page shows of a model's wait: `word` is the learner's word for the task. */
+function report(task, state, fields = {}) {
+  post({ type: "model", task, word: says[task] ?? task, state, ...fields });
+}
+
+/** The body of a response as one buffer. `progress(n)` is told how many bytes came in this step. */
+async function readBody(response, progress) {
+  const chunks = [];
+  let length = 0;
+  const reader = response.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    length += value.byteLength;
+    progress(value.byteLength);
+  }
+  const bytes = new Uint8Array(length);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return bytes.buffer;
+}
+
+/** The bytes of a model file: the checked copy in Cache Storage, or a download (checked, then kept). `progress(n)` hears the bytes downloaded. */
+async function modelBytes(model, cache, task, progress) {
   const kept = await cache.match(model.url);
   if (kept) {
     const bytes = await kept.arrayBuffer();
@@ -111,7 +143,7 @@ async function modelBytes(model, cache, task) {
     throw new Error(`ml.${call(task)}(): could not download the ${label(model.name)} from huggingface.co (${short(error)}). Run the sketch once while online; after that the browser keeps a copy.`);
   }
   if (!response.ok) throw new Error(`ml.${call(task)}(): could not download '${model.url}' (the site answered ${response.status}).`);
-  const bytes = await response.arrayBuffer();
+  const bytes = await readBody(response, progress);
   if (!(await isGood(bytes, model))) {
     throw new Error(`ml.${call(task)}(): the file downloaded for the ${label(model.name)} is not the one funground expects (its checksum is different), so it was not kept. Try again. If it keeps happening, tell the funground team.`);
   }
@@ -130,17 +162,33 @@ function sessionsFor(task) {
       const cache = await caches.open(CACHE);
       const missing = [];
       for (const model of models) if (!(await cache.match(model.url))) missing.push(model);
+      const total = missing.reduce((sum, model) => sum + model.size, 0);
+      let done = 0;
+      let reported = 0;
+      const progress = (count) => {
+        done += count;
+        const now = performance.now();
+        if (now - reported >= PROGRESS_MS) {
+          reported = now;
+          report(task, "downloading", { done, total });
+        }
+      };
       if (missing.length) {
-        const size = missing.reduce((sum, model) => sum + model.size, 0);
-        post({ type: "say", text: `Downloading the ${says[task] ?? task} model, ${megabytes(size)} MB, once. After that the browser keeps a copy.` });
+        post({ type: "say", text: `Downloading the ${says[task] ?? task} model, ${megabytes(total)} MB, once. After that the browser keeps a copy.` });
+        report(task, "downloading", { done, total });
       }
+      const files = [];
+      for (const model of models) files.push(await modelBytes(model, cache, task, progress));
+      if (missing.length) report(task, "downloading", { done, total });            // the last one, whatever the pace
+      report(task, "starting");
       const sessions = [];
-      for (const model of models) {
-        const bytes = await modelBytes(model, cache, task);
+      for (const [index, model] of models.entries()) {
+        const bytes = files[index];
         sessions.push(model.file.endsWith(".json")
           ? JSON.parse(new TextDecoder().decode(bytes))
           : await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ["wasm"], graphOptimizationLevel: "all" }));
       }
+      report(task, "ready");
       return sessions;
     })();
     made.catch(() => tasks.delete(task));                 // the next frame may try again
@@ -167,7 +215,7 @@ async function find({ task, key, pixels, width, height }) {
     const points = found === null ? null : found.points;
     post({ type: "result", task, key, points, score: found === null ? 0 : found.score, width, height }, points ? [points.buffer] : []);
   } catch (error) {
-    post({ type: "unavailable", task, reason: errorSentence(task, error) });
+    unavailable(task, error);
   }
 }
 
@@ -180,7 +228,7 @@ async function vector({ task, key, pixels, width, height }) {
     const numbers = await pictures.get(task).vector({ rgba: new Uint8Array(pixels), width, height });
     post({ type: "result", task, key, vector: numbers }, [numbers.buffer]);
   } catch (error) {
-    post({ type: "unavailable", task, reason: errorSentence(task, error) });
+    unavailable(task, error);
   }
 }
 
@@ -203,7 +251,7 @@ async function hear({ task, key, rate, samples }) {
     const { text, score } = await whisper.transcribe(new Float32Array(samples), rate);
     post({ type: "result", task, key, text, score });
   } catch (error) {
-    post({ type: "unavailable", task, reason: errorSentence(task, error) });
+    unavailable(task, error);
   }
 }
 
@@ -212,6 +260,12 @@ async function hear({ task, key, rate, samples }) {
 function errorSentence(task, error) {
   const text = String(error?.message ?? error);
   return text.startsWith(`ml.${call(task)}()`) ? text : `ml.${call(task)}(): the browser could not run the ${says[task] ?? task} model (${short(error)}).`;
+}
+
+function unavailable(task, error) {
+  const reason = errorSentence(task, error);
+  post({ type: "unavailable", task, reason });
+  report(task, "failed", { reason });
 }
 
 const handlers = {
