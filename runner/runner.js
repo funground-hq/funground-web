@@ -109,7 +109,10 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
 
   function startWorker() {
     const created = new Worker(workerScript, { type: "module" });
-    const slot = { worker: created, ready: null, loaded: false };
+    // SPIKE S-241: a cross-origin isolated page can interrupt Python. Byte 0 is Pyodide's interrupt buffer (2 = SIGINT);
+    // byte 1 says the page asked to stop, so the worker does not report the KeyboardInterrupt as the learner's error.
+    const interrupt = globalThis.crossOriginIsolated ? new Int8Array(new SharedArrayBuffer(2)) : null;
+    const slot = { worker: created, ready: null, loaded: false, interrupt };
     slot.ready = new Promise((resolve, reject) => {
       created.onerror = (e) => reject(new Error(`the runner's worker failed to load: ${e.message}`));
       created.onmessage = (e) => {
@@ -121,7 +124,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       };
     });
     slot.ready.catch(() => {});                                    // reported where it is awaited
-    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts, packages: hostPackages, install });
+    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts, packages: hostPackages, install, interrupt: interrupt?.buffer });
     console.debug("runner: worker started");
     return slot;
   }
@@ -155,6 +158,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     const slot = worker;
     const answered = new Promise((resolve) => { slot.stopped = () => resolve(true); });
     finish("stopped", { keepWorker: true });
+    if (slot.interrupt) { Atomics.store(slot.interrupt, 1, 1); Atomics.store(slot.interrupt, 0, 2); }   // SPIKE S-241
     slot.worker.postMessage({ type: "stop" });
     const stopped = await Promise.race([answered, new Promise((resolve) => setTimeout(resolve, STOP_WAIT_MS, false))]);
     slot.stopped = null;

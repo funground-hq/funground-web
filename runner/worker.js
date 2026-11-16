@@ -245,7 +245,7 @@ function fetchUrl(address) {
 // run() still runs as a sketch, D-088), and an implicit library is there before the first line runs. And when it is loaded
 // every file goes through its Session. There is no plain-script path in a runner that has funground; a runner
 // without it has nothing but the plain path (plainRun). The two never mix in one worker.
-async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts, packages, install = "on import" }) {
+async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts, packages, install = "on import", interrupt }) {
   withFunground = packages === undefined || packages.includes("funground");
   const runtime = new URL(runtimeUrl ?? "runtime/", import.meta.url);
   onnxruntimeUrl = onnxruntimeOption ?? ONNXRUNTIME;
@@ -259,6 +259,7 @@ async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxrunt
     indexURL: pyodideUrl,
     env: { SDL_VIDEODRIVER: "dummy", FUNGROUND_HEADLESS: "1", PYGAME_HIDE_SUPPORT_PROMPT: "1" },
   });
+  if (interrupt) { interruptFlags = new Int8Array(interrupt); py.setInterruptBuffer(interruptFlags); }   // SPIKE S-241
   py.setStdout({ write: writers.stdout.write });
   py.setStderr({ write: writers.stderr.write });
   if (packages !== undefined) await prepareHost(packages, install, pyodideUrl);                // an unknown name stops the start here
@@ -932,7 +933,10 @@ function event({ kind, x, y, button, key, keyCode, delta }) {
 
 // A learner sees the traceback from their own file down, not the host's frames above it, nor the runner's own (input(): S-272).
 // What the run printed comes first, a last line without a newline too.
+let interruptFlags = null;                                                 // SPIKE S-241: [signal, the page asked to stop]
+
 function fail(error) {
+  if (interruptFlags?.[1] && String(error.message ?? error).includes("KeyboardInterrupt")) return;   // SPIKE S-241: a stop, not an error
   try { flushOutput(); } catch { /* Python itself is broken: the error says why */ }
   const message = String(error.message ?? error).replace(/^ {2}File "<runner>", line \d+, in .*\n(?: {4}.*\n)*/gm, "");
   const first = message.indexOf(`File "${sketchFile}"`);
@@ -1044,6 +1048,7 @@ function postCameraRequest(command, fields) {
 // ---- messages
 
 function stop() {
+  if (interruptFlags) Atomics.store(interruptFlags, 0, 0);                 // SPIKE S-241: an interrupt not yet taken would hit finish()
   try {
     session?.stop();
   } catch (error) {
@@ -1052,6 +1057,7 @@ function stop() {
     if (session) sendNewFiles();                                           // what the sketch saved in finish(), before the next run deletes its folder
     session = null;
     flushOutput();                                                         // what finish() printed, before the next run's output
+    if (interruptFlags) Atomics.store(interruptFlags, 1, 0);                // SPIKE S-241
     post({ type: "stopped" });
   }
 }
