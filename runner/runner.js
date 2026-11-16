@@ -171,7 +171,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
 
   function handle(message) {
     switch (message.type) {
-      case "output": write(message.text, message.stream); break;
+      case "output": if (!(message.models && onModel)) write(message.text, message.stream); break;   // with onModel the page shows downloads itself
       case "error": write(message.message, "stderr"); finish("error"); break;
       case "frame": if (run) drawFrame(message); break;           // a stopped run's last frames are not drawn
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
