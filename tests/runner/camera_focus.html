@@ -1,0 +1,80 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>funground runner camera focus test</title>
+<body>
+<script type="module">
+// Driven by tools/test_camera.py --only-focus (D-155). The fake camera's focus is Chrome's own, so the page puts
+// focus capabilities on the real track (own methods shadow the track's own), and records every applyConstraints call. A
+// camera of the runner's own (createCamera, no worker) is started, and the page posts what onCamera and focus() gave.
+import { createCamera } from "/runner/camera.js";
+// The fake camera of recent Chrome does offer focus (manual and continuous, a range of 10 to 100), so "none" is stubbed too.
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const post = (path, body) => fetch(path, { method: "POST", body });
+const ask = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+const report = { cases: {} };
+
+// A track that offers `capabilities`; `behaviour.refuse` makes applyConstraints reject, as a browser may.
+function stubbed(capabilities, behaviour, applied) {
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    const stream = await ask(constraints);
+    const track = stream.getVideoTracks()[0];
+    const settings = { ...track.getSettings(), focusMode: "manual", focusDistance: 0.4 };
+    track.getCapabilities = () => capabilities;
+    track.getSettings = () => ({ ...settings });
+    track.applyConstraints = async ({ advanced }) => {
+      applied.push(advanced);
+      if (behaviour.refuse) throw new DOMException("refused", "OverconstrainedError");
+      Object.assign(settings, advanced[0]);
+    };
+    return stream;
+  };
+}
+
+async function caught(promise) {
+  try { return { value: await promise }; } catch (error) { return { error: String(error.message) }; }
+}
+
+async function run(id, capabilities, scenario) {
+  const events = [], applied = [], behaviour = { refuse: false };
+  if (capabilities) stubbed(capabilities, behaviour, applied); else navigator.mediaDevices.getUserMedia = ask;
+  const camera = createCamera({ onFrame: () => {}, onUnavailable: (reason) => events.push({ unavailable: reason }), onCamera: (info) => events.push(info) });
+  camera.command({ command: "start", fields: { width: 160, height: 120 } });
+  const end = performance.now() + 30000;
+  while (!events.length && performance.now() < end) await sleep(50);
+  const result = { events: [...events], applied };
+  try { await scenario(camera, behaviour, result, applied); } catch (error) { result.fatal = String(error.stack ?? error); }
+  camera.reset();
+  result.after = events.slice(result.events.length);
+  result.closedFocus = await camera.focus({ mode: "auto" });
+  report.cases[id] = result;
+}
+
+const full = { focusMode: ["manual", "single-shot", "continuous"], focusDistance: { min: 0.1, max: 1, step: 0.01 } };
+try {
+  await run("full", full, async (camera, behaviour, result, applied) => {
+    result.auto = await camera.focus({ mode: "auto" });
+    result.manual = await camera.focus({ mode: "manual", distance: 0.5 });
+    result.far = await camera.focus({ mode: "manual", distance: 5 });
+    result.near = await camera.focus({ mode: "manual", distance: -3 });
+    result.invalid = [
+      await caught(Promise.resolve().then(() => camera.focus({ mode: "sideways" }))),
+      await caught(Promise.resolve().then(() => camera.focus({ mode: "manual" }))),
+      await caught(Promise.resolve().then(() => camera.focus({ mode: "manual", distance: NaN }))),
+      await caught(Promise.resolve().then(() => camera.focus())),
+    ];
+    result.calls = applied.length;
+    behaviour.refuse = true;
+    result.refused = await caught(camera.focus({ mode: "manual", distance: 0.9 }));
+  });
+  await run("distance only", { focusDistance: { min: 0, max: 10, step: 1 } }, async (camera, behaviour, result) => {
+    result.manual = await camera.focus({ mode: "manual", distance: 3 });
+  });
+  await run("none", { focusMode: ["none"] }, async (camera, behaviour, result) => {
+    result.auto = await camera.focus({ mode: "auto" });
+  });
+} catch (error) {
+  report.fatal = String(error.stack ?? error);
+}
+await post("/result", JSON.stringify(report));
+</script>

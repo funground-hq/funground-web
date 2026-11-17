@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>funground runner camera fit test</title>
+<body>
+<script type="module">
+// Driven by tools/test_camera.py --only-fit (story S-311). Chrome's fake camera plays a portrait picture (a circle in the
+// middle). For each fit, a camera of the runner's own (createCamera, no worker) is asked for 160 x 120 and posts the first
+// frame it sends, as base64 RGBA, with the camera's state. Nothing is drawn: the test reads the pixels.
+import { createCamera } from "/runner/camera.js";
+
+// Chrome crops and scales the camera to the size asked (settings.resizeMode "crop-and-scale"), which would hide the problem.
+// A phone may give its own tall picture instead, so the test asks the browser for the camera without a size: the picture
+// keeps its own shape (portrait), and camera.js must make the shape of the frame.
+const ask = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+navigator.mediaDevices.getUserMedia = () => ask({ video: true, audio: false });
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const post = (path, body) => fetch(path, { method: "POST", body });
+const report = { fits: {} };
+try {
+  for (const fit of ["stretch", "cover"]) {
+    let frame = null, unavailable = null;
+    const camera = createCamera({
+      fit,
+      onFrame: (pixels, width, height) => { frame ??= { width, height, base64: btoa(String.fromCharCode(...pixels)) }; },
+      onUnavailable: (reason) => { unavailable = reason; },
+    });
+    camera.command({ command: "start", fields: { width: 160, height: 120 } });
+    const end = performance.now() + 30000;
+    while (!frame && !unavailable && performance.now() < end) { camera.sendFrame(); await sleep(50); }
+    report.fits[fit] = { frame, unavailable, state: camera.state() };
+    camera.reset();
+  }
+} catch (error) {
+  report.fatal = String(error.stack ?? error);
+}
+await post("/result", JSON.stringify(report));
+</script>
