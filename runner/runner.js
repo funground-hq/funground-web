@@ -63,9 +63,12 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   microphone is asked for as usual)
  * @param {string} [options.cameraRefusal]  for a host that does not allow the camera (VS Code's panel): why, in a few words; a
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
+ * @param {"stretch" | "cover"} [options.fit]  what the page does when the camera's picture has another shape than the size the
+ *   sketch asked for: "stretch" (default, as always) scales it to the size; "cover" cuts evenly from the long sides first. A host
+ *   option; no sketch can set it (D-154)
  * @returns {Promise<{info: object, run: Function, check: Function, stop: Function, keep: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, onModel, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, onModel, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null, fit = "stretch" }) {
   // S-274, S-276, D-144 e: what `packages` and `install` may hold. Checked first, before anything is made.
   const hostPackages = checkedPackages(packages, install, baseUrl);
   const write = outputWriter(output);
@@ -80,6 +83,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     onFrame: (pixels, width, height) => { if (run) worker.worker.postMessage({ type: "camera", pixels, width, height }, [pixels.buffer]); },
     onUnavailable: (reason) => { if (run) worker.worker.postMessage({ type: "camera-unavailable", reason }); },
     cameraRefusal,
+    fit,
   });
   // Browsers keep a page silent until the visitor has clicked or pressed a key on it: the first of either, and Run, unlock sound.
   for (const kind of ["pointerdown", "keydown"]) window.addEventListener(kind, audio.unlock, { capture: true, passive: true });

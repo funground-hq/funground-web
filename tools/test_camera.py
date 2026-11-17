@@ -13,11 +13,17 @@ Three cases, each in its own runner (tests/runner/camera.html):
   * host refusal: the runner is made with cameraRefusal (as VS Code's panel is). The same sketch gets that reason in one
     line, and the browser is never asked.
 
+  * fit (S-311, --only-fit): Chrome's fake camera plays a portrait picture written at test time (tests/out/portrait.y4m, a
+    white circle in the middle). Asked for 160 x 120, fit "stretch" must squash the circle (today's picture) and "cover" must
+    keep it round, both at 160 x 120 (tests/runner/camera_fit.html uses createCamera alone, one Chrome start).
+
 Chrome is started with its own temporary profile and stopped by its PID; the maintainer's Chrome and camera are never
 touched (the fake device replaces every camera). Real use is the maintainer's job, on the live site.
 """
 from __future__ import annotations
 
+import argparse
+import base64
 import json
 import sys
 from pathlib import Path
@@ -66,13 +72,98 @@ def problems_refused(got: dict, reason: str) -> list[str]:
     return problems
 
 
+PORTRAIT = (240, 320)               # a phone held upright: taller than wide
+ASKED = (160, 120)                  # what the page asks for in the fit test (a landscape sketch)
+
+
+def write_portrait_y4m(path: Path, frames: int = 5) -> None:
+    """A small portrait Y4M video: a white circle (diameter 160) in the middle of black, a few frames of the same picture."""
+    width, height = PORTRAIT
+    luma = bytearray(width * height)
+    for y in range(height):
+        for x in range(width):
+            inside = (x + 0.5 - width / 2) ** 2 + (y + 0.5 - height / 2) ** 2 <= 80 ** 2
+            luma[y * width + x] = 235 if inside else 16
+    chroma = bytes([128]) * (width * height // 4)
+    frame = b"FRAME\n" + bytes(luma) + chroma + chroma
+    path.write_bytes(f"YUV4MPEG2 W{width} H{height} F10:1 Ip A1:1 C420jpeg\n".encode() + frame * frames)
+
+
+def bright_box(frame: dict | None) -> tuple[int, int]:
+    """The width and height of the box around the bright pixels of a frame the page posted (0, 0 for none)."""
+    if not frame:
+        return (0, 0)
+    width, height, rgba = frame["width"], frame["height"], base64.b64decode(frame["base64"])
+    xs, ys = [], []
+    for y in range(height):
+        for x in range(width):
+            if rgba[(y * width + x) * 4] > 128:
+                xs.append(x)
+                ys.append(y)
+    return (max(xs) - min(xs) + 1, max(ys) - min(ys) + 1) if xs else (0, 0)
+
+
+def problems_fit(got: dict) -> list[str]:
+    if "fatal" in got:
+        return [f"page: {got['fatal']}"]
+    problems = []
+    boxes = {}
+    for fit, result in got["fits"].items():
+        frame = result["frame"]
+        if not frame:
+            problems.append(f"{fit}: no frame ({result['unavailable']})")
+            continue
+        if (frame["width"], frame["height"]) != ASKED:
+            problems.append(f"{fit}: the frame is {frame['width']} x {frame['height']}, not {ASKED}")
+        boxes[fit] = bright_box(frame)
+        state = result["state"] or {}
+        if state.get("fit") != fit or not state.get("open") or not state.get("label"):
+            problems.append(f"{fit}: state() does not describe the open camera: {state}")
+        settings = state.get("settings", {})
+        if not settings.get("height", 0) > settings.get("width", 1):
+            problems.append(f"{fit}: the track settings are not portrait: {settings}")
+        if "capabilities" not in state:
+            problems.append(f"{fit}: state() has no capabilities")
+    if "stretch" in boxes:
+        w, h = boxes["stretch"]
+        if not (w > 1.4 * h and h > 20):                                  # 107 wide, 60 tall when squashed
+            problems.append(f"stretch: the circle should be squashed (wider than tall) but its box is {w} x {h}")
+    if "cover" in boxes:
+        w, h = boxes["cover"]
+        if not (abs(w - h) <= 3 and w > 80):                              # 107 by 107 when round
+            problems.append(f"cover: the circle should be round but its box is {w} x {h}")
+    return problems
+
+
+def fit_main(out: Path, log_path: Path, report: dict, failures: list[str]) -> None:
+    video = out / "portrait.y4m"
+    write_portrait_y4m(video)
+    got = run_chrome([{"id": "fit"}], FAKE + [f"--use-file-for-fake-video-capture={video}"], 300, log_path, page="camera_fit.html")
+    if got is None:
+        failures.append("fit: the Chrome start failed or timed out")
+        return
+    report["fit"] = {fit: {**{k: v for k, v in r.items() if k != "frame"}, "box": bright_box(r["frame"])}
+                     for fit, r in got.get("fits", {}).items()}
+    failures += [f"fit: {p}" for p in problems_fit(got)]
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--only-fit", action="store_true", help="only the fit test (S-311), one Chrome start")
+    args = parser.parse_args()
     out = REPO / "tests" / "out"
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "chrome_camera.log"
     log_path.write_bytes(b"")
     report: dict = {}
     failures: list[str] = []
+
+    if args.only_fit:
+        fit_main(out, log_path, report, failures)
+        print(json.dumps(report, indent=1))
+        print("FAILED" if failures else "all passed", f"({len(failures)} problems)")
+        print("\n".join(failures))
+        return 1 if failures else 0
 
     first = run_chrome([case("live", "^saved"), case("host refusal", "not available", refusal=HOST_REASON)],
                        FAKE, 600, log_path, page="camera.html")
@@ -91,6 +182,8 @@ def main() -> int:
     else:
         report["refused"] = second["cases"][0]
         failures += [f"refused: {p}" for p in problems_refused(second["cases"][0], "it was not allowed")]
+
+    fit_main(out, log_path, report, failures)
 
     report["failures"] = failures
     (out / "camera_report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
