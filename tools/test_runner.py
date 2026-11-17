@@ -1,6 +1,7 @@
 r"""Test the browser runner in headless Chrome (story S-153).
 
     C:\Projects\playground\.venv\Scripts\python.exe tools/test_runner.py --funground C:\Projects\playground-0.2 [--profile DIR] [--dpr 2]
+    ... --only-stop   (only the stop pages of S-241: a busy sketch with and without the isolation headers, about 2 minutes)
 
 Needs runner/runtime/ (tools/build_runtime.py). A localhost server (this script) serves the repository, counts the
 bytes it sends, hands tests/runner/test.html its list of cases, and receives the page's report and the canvas
@@ -23,6 +24,7 @@ import gzip
 import hashlib
 import http.server
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -120,8 +122,13 @@ def build_test_wheels(folder: Path) -> dict:
     return wheels
 
 
-def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent: dict, requests: list[str]):
-    """`requests` gets one entry per request, "GET /path"; the page asks for the ones since a mark."""
+# What makes a page cross-origin isolated (S-241): the two headers, and CORP so that the page's own worker and files may load under COEP.
+ISOLATION_HEADERS = {"Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp",
+                     "Cross-Origin-Resource-Policy": "cross-origin"}
+
+
+def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent: dict, requests: list[str], extra_headers: dict | None = None):
+    """`requests` gets one entry per request, "GET /path"; the page asks for the ones since a mark. `extra_headers` go on every GET."""
     class Handler(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"                           # keep-alive: a closed connection can cut a large body short
 
@@ -135,7 +142,7 @@ def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent
                 self.reply(json.dumps(requests[since + 1:]).encode(), ".json")
                 return
             requests.append(f"GET {path}")
-            target = (REPO / path.lstrip("/")).resolve()
+            target = Path(os.path.normpath(REPO / path.lstrip("/")))      # not resolve(): runner/runtime may be a link to a built runtime elsewhere
             if REPO not in target.parents or not target.is_file():
                 self.send_error(404)
                 return
@@ -152,7 +159,7 @@ def serve(cases: list[dict], snaps: Path, box: dict, done: threading.Event, sent
             self.send_response(status)
             self.send_header("Content-Type", TYPES.get(suffix, "application/octet-stream"))
             self.send_header("Content-Length", str(len(data)))
-            for name, value in (headers or {}).items():
+            for name, value in {**(extra_headers or {}), **(headers or {})}.items():
                 self.send_header(name, value)
             self.end_headers()
             for i in range(0, len(data), 65536):                # the default single write stalls on large bodies here
@@ -485,20 +492,43 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
     return checks
 
 
+def check_stop_pages(isolated: dict | None, plain: dict | None) -> dict[str, bool]:
+    """S-241, D-150 a: a busy sketch under the isolation headers stops at once and keeps its worker; without them it is as before
+    (the worker is ended after STOP_WAIT_MS and a new Python starts). Either way the learner sees no KeyboardInterrupt, and the next
+    sketch's output is its own. A page that gave no report (None: Chrome timed out) fails every check."""
+    checks: dict[str, bool] = {}
+    clean = lambda run: "KeyboardInterrupt" not in run["learnerSaw"] and "Traceback" not in run["learnerSaw"]
+    isolated, plain = isolated or {}, plain or {}
+    checks["stop (isolated): the page is cross-origin isolated"] = isolated.get("isolated") is True and not isolated.get("fatal")
+    checks["stop (not isolated): the page is not cross-origin isolated"] = plain.get("isolated") is False and not plain.get("fatal")
+    for name, where in (("draw", "in draw()"), ("top", "at the top")):
+        run = isolated.get("runs", {}).get(name)
+        checks[f"stop (isolated): a sketch busy {where} stops in under 200 ms with no restart"] = bool(
+            run and run["stopMs"] < 200 and run["restarted"] == 0)
+        checks[f"stop (isolated): after a busy {name} the learner sees no KeyboardInterrupt and the next sketch's output is its own"] = bool(
+            run and clean(run) and run["nextOk"] and run["nextOutput"] == f"next after {name}")
+        run = plain.get("runs", {}).get(name)
+        checks[f"stop (not isolated): a busy {name} still waits, then ends its worker, and the next sketch runs"] = bool(
+            run and run["stopMs"] >= 900 and run["restarted"] == 1 and clean(run) and run["nextOk"]
+            and run["nextOutput"] == f"next after {name}")
+    return checks
+
+
 BATCH = 3            # cases per Chrome start: a long chain of worker boots in one page stalled on this machine (see the README)
 
 
-def run_batch(cases: list[dict], scenarios: bool, args, snaps: Path, sent: dict, log_path: Path) -> dict | None:
+def run_batch(cases: list[dict], scenarios: bool, args, snaps: Path, sent: dict, log_path: Path,
+              page: str = "test.html", extra_headers: dict | None = None) -> dict | None:
     """One Chrome start: its page runs these cases (and the scenarios if asked) and posts one report; None on timeout."""
     box: dict = {}
     done = threading.Event()
-    server = serve(cases, snaps, box, done, sent, [])
+    server = serve(cases, snaps, box, done, sent, [], extra_headers)
     profile = args.profile or Path(tempfile.mkdtemp(prefix="chrome_runner_"))
     query = f"?scenarios={int(scenarios)}&prewarm={0 if args.no_prewarm else 1}"
     command = [CHROME, "--headless=new", "--enable-logging=stderr", f"--user-data-dir={profile}", *FLAGS]
     if args.dpr != 1:
         command.append(f"--force-device-scale-factor={args.dpr}")
-    command.append(f"http://127.0.0.1:{server.server_port}/tests/runner/test.html{query}")
+    command.append(f"http://127.0.0.1:{server.server_port}/tests/runner/{page}{query if page == 'test.html' else ''}")
     with open(log_path, "ab") as log:                         # the page's console and crashes
         chrome = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=log)
         print(f"chrome pid {chrome.pid}: {[c['id'] for c in cases]}{' + scenarios' if scenarios else ''}", file=sys.stderr, flush=True)
@@ -524,11 +554,21 @@ def main() -> int:
     parser.add_argument("--no-prewarm", action="store_true", help="the runner starts a worker only when a run needs it")
     parser.add_argument("--limit", type=int, help="run only the first N cases (for debugging)")
     parser.add_argument("--skip-scenarios", action="store_true", help="only the examples")
+    parser.add_argument("--only-stop", action="store_true", help="only the stop pages (S-241): a busy sketch, with and without isolation headers")
     args = parser.parse_args()
 
     runtime = REPO / "runner" / "runtime"
-    cases = build_cases(args.funground.resolve(), runtime)[:args.limit]
     out = REPO / "tests" / "out"
+    if args.only_stop:
+        out.mkdir(parents=True, exist_ok=True)
+        log_path = out / "chrome.log"
+        log_path.write_bytes(b"")
+        pages = {mode: run_batch([], False, args, out, {}, log_path, "stop.html", headers)
+                 for mode, headers in (("isolated", ISOLATION_HEADERS), ("plain", None))}
+        checks = check_stop_pages(pages["isolated"], pages["plain"])
+        print(json.dumps({"pages": pages, "checks": checks}, indent=1))
+        return 0 if all(page is not None for page in pages.values()) and all(checks.values()) else 1
+    cases = build_cases(args.funground.resolve(), runtime)[:args.limit]
     build_test_wheels(out / "wheels")
     snaps = out / "snaps"
     shutil.rmtree(snaps, ignore_errors=True)
@@ -559,6 +599,10 @@ def main() -> int:
     else:
         report["scaled"] = [scale_check(c, snaps, args.dpr) for c in taken]
     report["checks"] = check_scenarios(report["scenarios"])
+    if not args.skip_scenarios:                                    # S-241: two more Chrome starts, one with the isolation headers
+        report["stop_pages"] = {mode: run_batch([], False, args, snaps, sent, log_path, "stop.html", headers)
+                                for mode, headers in (("isolated", ISOLATION_HEADERS), ("plain", None))}
+        report["checks"].update(check_stop_pages(report["stop_pages"]["isolated"], report["stop_pages"]["plain"]))
     report["checks"].update(check_sources(report.get("ready")))
     if not args.skip_scenarios:
         report["checks"].update(check_capabilities(report.get("ready"), report["checks"]))
