@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>funground runner: stopping a busy sketch</title>
+<body>
+<canvas id="canvas" width="200" height="200"></canvas>
+<script type="module">
+// Driven by tools/test_runner.py (S-241, D-150 a). The driver serves this page twice: with the isolation headers (COOP
+// same-origin, COEP require-corp) and without. A runner that was made with `reuse`, as Play's preview makes it, runs a sketch that is
+// busy in its own code (in draw(), and at the top of the file), is stopped, and then runs a second sketch. The report says how long
+// Stop took, whether the worker was ended (`onRestart`), what the learner saw, and what the second sketch printed.
+import { createRunner } from "/runner/runner.js";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const post = (path, body) => fetch(path, { method: "POST", body });
+const report = { isolated: globalThis.crossOriginIsolated, runs: {} };
+
+try {
+  const out = [];
+  let ended = null, frames = 0, restarts = 0;
+  const runner = await createRunner({
+    canvas: document.getElementById("canvas"), baseUrl: new URL("/runner/", location.href), reuse: true,
+    output: (text) => out.push(text),
+    onFrame: (n) => { frames = n; },
+    onFinish: (reason) => { ended = reason; },
+    onRestart: () => { restarts++; },
+  });
+  const until = async (condition, ms, what) => {
+    const end = performance.now() + ms;
+    while (!condition()) {
+      if (performance.now() > end) throw new Error(`timed out waiting for ${what}`);
+      await sleep(20);
+    }
+  };
+  const busy = {
+    draw: "import funground as f\nprint('busy draw')\ndef draw():\n    if f.frame_count > 3:\n        while True:\n            pass\nf.run()\n",
+    top: "print('busy top')\nwhile True:\n    pass\n",
+  };
+  for (const [name, source] of Object.entries(busy)) {
+    post("/log", `stop.html: ${name}`);
+    out.length = 0; ended = null; frames = 0;
+    runner.run(source, { filename: "busy.py", width: 100, height: 100 });          // not awaited: a sketch busy at the top never says it started
+    await until(() => out.join("").includes(`busy ${name}`), 30000, "the sketch to start");
+    if (name === "draw") await until(() => frames >= 4, 30000, "frames before the loop");
+    await sleep(500);                                               // it is spinning by now
+    const beforeRestarts = restarts;
+    const t = performance.now();
+    await runner.stop();
+    const stopMs = Math.round(performance.now() - t);
+    const learnerSaw = out.join("");
+    const t2 = performance.now();
+    out.length = 0; ended = null;
+    const next = await runner.run(`print("next after ${name}")\n`, { filename: "next.py" });
+    await until(() => ended !== null, 60000, "the next sketch to end");
+    report.runs[name] = { stopMs, restarted: restarts - beforeRestarts, learnerSaw, nextOk: next.ok, nextOutput: out.join(""),
+      nextMs: Math.round(performance.now() - t2) };
+  }
+  runner.stop();
+} catch (error) {
+  report.fatal = String(error.stack ?? error);
+}
+await post("/result", JSON.stringify(report));
+</script>
