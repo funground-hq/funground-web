@@ -17,6 +17,11 @@ Three cases, each in its own runner (tests/runner/camera.html):
     white circle in the middle). Asked for 160 x 120, fit "stretch" must squash the circle (today's picture) and "cover" must
     keep it round, both at 160 x 120 (tests/runner/camera_fit.html uses createCamera alone, one Chrome start).
 
+  * focus (D-155, --only-focus): the fake camera's focus is Chrome's own to change, so tests/runner/camera_focus.html puts focus capabilities on
+    the real track and records the constraints applied. onCamera must say open (with the focus offered, or null) and closed;
+    focus() must apply auto (continuous) and manual (the distance kept inside the range), throw a plain Error for a bad
+    setting, survive a refusal, and give null when the camera is closed or offers none.
+
 Chrome is started with its own temporary profile and stopped by its PID; the maintainer's Chrome and camera are never
 touched (the fake device replaces every camera). Real use is the maintainer's job, on the live site.
 """
@@ -147,9 +152,65 @@ def fit_main(out: Path, log_path: Path, report: dict, failures: list[str]) -> No
     failures += [f"fit: {p}" for p in problems_fit(got)]
 
 
+def problems_focus(got: dict) -> list[str]:
+    if "fatal" in got:
+        return [f"page: {got['fatal']}"]
+    problems = []
+    cases = got["cases"]
+
+    def check(condition: bool, text: str) -> None:
+        if not condition:
+            problems.append(text)
+
+    for case_id, result in cases.items():
+        if "fatal" in result:
+            problems.append(f"{case_id}: {result['fatal']}")
+        check(result["after"] == [{"open": False}], f"{case_id}: closing should say {{open: false}} once, got {result['after']}")
+        check(result["closedFocus"] is None, f"{case_id}: focus() on a closed camera should give null, got {result['closedFocus']}")
+
+    full = cases["full"]
+    modes = ["manual", "single-shot", "continuous"]
+    distance = {"min": 0.1, "max": 1, "step": 0.01}
+    opened = full["events"][0] if full["events"] else {}
+    check(opened.get("open") is True and (opened.get("focus") or {}).get("modes") == modes
+          and opened["focus"]["distance"] == distance, f"full: onCamera open should list the focus offered: {full['events']}")
+    check(full["applied"][:1] == [[{"focusMode": "continuous"}]], f"full: continuous focus should be asked at start: {full['applied']}")
+    check((opened.get("focus") or {}).get("mode") == "continuous", f"full: the info at open should show continuous focus: {opened}")
+    check((full["auto"] or {}).get("mode") == "continuous", f"full: auto: {full['auto']}")
+    for key, value in (("manual", 0.5), ("far", 1), ("near", 0.1)):
+        info = full[key] or {}
+        check(info.get("mode") == "manual" and info.get("value") == value, f"full: manual distance should end at {value}: {info}")
+    check(full["applied"][2:5] == [[{"focusMode": "manual", "focusDistance": v}] for v in (0.5, 1, 0.1)],
+          f"full: the constraints applied for manual are wrong: {full['applied']}")
+    check(all("error" in r and r["error"].startswith("camera focus:") for r in full["invalid"]),
+          f"full: a bad setting should throw a plain Error: {full['invalid']}")
+    check(full["calls"] == 5, f"full: a bad setting must apply nothing ({full['calls']} calls, expected 5)")
+    refused = full["refused"]
+    check("value" in refused and refused["value"]["value"] == 0.1, f"full: a refusal should give the focus it kept, not throw: {refused}")
+
+    only = cases["distance only"]
+    check((only["events"][0].get("focus") or {}).get("modes") == [] and only["events"][0]["focus"]["distance"] is not None,
+          f"distance only: the range alone should count as focus: {only['events']}")
+    check(only["applied"] == [[{"focusMode": "manual", "focusDistance": 3}]], f"distance only: {only['applied']}")
+    none = cases["none"]
+    check(none["events"] == [{"open": True, "focus": None}], f"none: a camera without focus should say focus null: {none['events']}")
+    check(none["auto"] is None, f"none: focus() should give null: {none['auto']}")
+    return problems
+
+
+def focus_main(log_path: Path, report: dict, failures: list[str]) -> None:
+    got = run_chrome([{"id": "focus"}], FAKE, 300, log_path, page="camera_focus.html")
+    if got is None:
+        failures.append("focus: the Chrome start failed or timed out")
+        return
+    report["focus"] = got
+    failures += [f"focus: {p}" for p in problems_focus(got)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--only-fit", action="store_true", help="only the fit test (S-311), one Chrome start")
+    parser.add_argument("--only-focus", action="store_true", help="only the focus test (D-155), one Chrome start")
     args = parser.parse_args()
     out = REPO / "tests" / "out"
     out.mkdir(parents=True, exist_ok=True)
@@ -160,6 +221,13 @@ def main() -> int:
 
     if args.only_fit:
         fit_main(out, log_path, report, failures)
+        print(json.dumps(report, indent=1))
+        print("FAILED" if failures else "all passed", f"({len(failures)} problems)")
+        print("\n".join(failures))
+        return 1 if failures else 0
+
+    if args.only_focus:
+        focus_main(log_path, report, failures)
         print(json.dumps(report, indent=1))
         print("FAILED" if failures else "all passed", f"({len(failures)} problems)")
         print("\n".join(failures))
@@ -184,6 +252,7 @@ def main() -> int:
         failures += [f"refused: {p}" for p in problems_refused(second["cases"][0], "it was not allowed")]
 
     fit_main(out, log_path, report, failures)
+    focus_main(log_path, report, failures)
 
     report["failures"] = failures
     (out / "camera_report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
