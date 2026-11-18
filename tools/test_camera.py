@@ -122,13 +122,17 @@ def problems_fit(got: dict) -> list[str]:
             problems.append(f"{fit}: the frame is {frame['width']} x {frame['height']}, not {ASKED}")
         boxes[fit] = bright_box(frame)
         state = result["state"] or {}
-        if state.get("fit") != fit or not state.get("open") or not state.get("label"):
+        if state.get("fit") != ("cover" if fit == "default" else fit) or not state.get("open") or not state.get("label"):
             problems.append(f"{fit}: state() does not describe the open camera: {state}")
         settings = state.get("settings", {})
         if not settings.get("height", 0) > settings.get("width", 1):
             problems.append(f"{fit}: the track settings are not portrait: {settings}")
         if "capabilities" not in state:
             problems.append(f"{fit}: state() has no capabilities")
+    if "default" in boxes and "cover" in boxes and boxes["default"] != boxes["cover"]:
+        problems.append(f"default: with no fit given the picture should be as cover's {boxes['cover']}, but its box is {boxes['default']}")
+    if "default" in got["fits"] and (got["fits"]["default"]["state"] or {}).get("fit") != "cover":
+        problems.append("default: state() should say the default fit is cover")
     if "stretch" in boxes:
         w, h = boxes["stretch"]
         if not (w > 1.4 * h and h > 20):                                  # 107 wide, 60 tall when squashed
@@ -192,6 +196,11 @@ def problems_focus(got: dict) -> list[str]:
     check((only["events"][0].get("focus") or {}).get("modes") == [] and only["events"][0]["focus"]["distance"] is not None,
           f"distance only: the range alone should count as focus: {only['events']}")
     check(only["applied"] == [[{"focusMode": "manual", "focusDistance": 3}]], f"distance only: {only['applied']}")
+    front, back = cases["front"], cases["back"]
+    check(front["events"] == [{"open": True, "focus": None}], f"front: a front camera should say focus null (D-156): {front['events']}")
+    check(front["auto"] is None, f"front: focus() should give null: {front['auto']}")
+    check((back["events"][0].get("focus") or {}).get("modes") == modes, f"back: a camera facing away should offer focus: {back['events']}")
+    check((back["auto"] or {}).get("mode") == "continuous", f"back: auto: {back['auto']}")
     none = cases["none"]
     check(none["events"] == [{"open": True, "focus": None}], f"none: a camera without focus should say focus null: {none['events']}")
     check(none["auto"] is None, f"none: focus() should give null: {none['auto']}")

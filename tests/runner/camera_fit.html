@@ -18,10 +18,11 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const post = (path, body) => fetch(path, { method: "POST", body });
 const report = { fits: {} };
 try {
-  for (const fit of ["stretch", "cover"]) {
+  // "default" gives no fit: the runner's own default must be cover (D-154).
+  for (const fit of ["stretch", "cover", "default"]) {
     let frame = null, unavailable = null;
     const camera = createCamera({
-      fit,
+      fit: fit === "default" ? undefined : fit,
       onFrame: (pixels, width, height) => { frame ??= { width, height, base64: btoa(String.fromCharCode(...pixels)) }; },
       onUnavailable: (reason) => { unavailable = reason; },
     });

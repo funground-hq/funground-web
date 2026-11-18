@@ -15,11 +15,12 @@ const ask = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 const report = { cases: {} };
 
 // A track that offers `capabilities`; `behaviour.refuse` makes applyConstraints reject, as a browser may.
-function stubbed(capabilities, behaviour, applied) {
+function stubbed(capabilities, behaviour, applied, facingMode) {
   navigator.mediaDevices.getUserMedia = async (constraints) => {
     const stream = await ask(constraints);
     const track = stream.getVideoTracks()[0];
     const settings = { ...track.getSettings(), focusMode: "manual", focusDistance: 0.4 };
+    if (facingMode) settings.facingMode = facingMode;
     track.getCapabilities = () => capabilities;
     track.getSettings = () => ({ ...settings });
     track.applyConstraints = async ({ advanced }) => {
@@ -35,9 +36,9 @@ async function caught(promise) {
   try { return { value: await promise }; } catch (error) { return { error: String(error.message) }; }
 }
 
-async function run(id, capabilities, scenario) {
+async function run(id, capabilities, scenario, facingMode = null) {
   const events = [], applied = [], behaviour = { refuse: false };
-  if (capabilities) stubbed(capabilities, behaviour, applied); else navigator.mediaDevices.getUserMedia = ask;
+  if (capabilities) stubbed(capabilities, behaviour, applied, facingMode); else navigator.mediaDevices.getUserMedia = ask;
   const camera = createCamera({ onFrame: () => {}, onUnavailable: (reason) => events.push({ unavailable: reason }), onCamera: (info) => events.push(info) });
   camera.command({ command: "start", fields: { width: 160, height: 120 } });
   const end = performance.now() + 30000;
@@ -70,6 +71,13 @@ try {
   await run("distance only", { focusDistance: { min: 0, max: 10, step: 1 } }, async (camera, behaviour, result) => {
     result.manual = await camera.focus({ mode: "manual", distance: 3 });
   });
+  // D-156: a front camera lists focus, but offers none; a camera facing away offers it; a webcam (no facingMode) did above.
+  await run("front", full, async (camera, behaviour, result) => {
+    result.auto = await camera.focus({ mode: "auto" });
+  }, "user");
+  await run("back", full, async (camera, behaviour, result) => {
+    result.auto = await camera.focus({ mode: "auto" });
+  }, "environment");
   await run("none", { focusMode: ["none"] }, async (camera, behaviour, result) => {
     result.auto = await camera.focus({ mode: "auto" });
   });
