@@ -8,8 +8,9 @@
 // picture when the sketch asks for that; the page never does.
 //
 // The camera may give a different shape from the one asked for (a phone held upright gives a tall picture). The `fit`
-// option says what to do then: "stretch" (the default, contract row I4: every frame is scaled to the asked size) or
-// "cover" (keep the shape: cut evenly from the long sides, then scale). Only a host sets it; no sketch can (D-154).
+// option says what to do then: "cover" (the default, D-154 and contract row I4: cut evenly from the long sides, then scale,
+// so the picture keeps its shape) or "stretch" (scale each side to the asked size, so the picture may be squashed; the old
+// way, kept for the camera check page to compare). Only a host sets it; no sketch can.
 //
 // Focus (D-155): where the browser offers it (mostly Chrome on Android, and some webcams) a host can show a focus control.
 // `onCamera` says when the camera opens or closes and what focus it offers; `focus(setting)` applies one. The sketch never
@@ -25,12 +26,12 @@
  * @param {string | null} [options.cameraRefusal]  when set, the camera is never asked for: a sketch that starts it is told this
  *   reason instead (for a host that does not allow the camera, such as VS Code's panel)
  * @param {"stretch" | "cover"} [options.fit]  what to do when the camera's picture has another shape than the asked size:
- *   "stretch" (default) scales it to the size, so it may be squashed; "cover" cuts evenly from the long sides, then scales
+ *   "cover" (default, D-154) cuts evenly from the long sides, then scales; "stretch" scales it to the size, so it may be squashed
  * @param {(info: {open: boolean, focus?: object | null}) => void} [options.onCamera]  the camera opened ({open: true, focus}) or
  *   closed ({open: false}). `focus` is null when the camera offers no focus; else {modes, distance: {min, max, step} | null,
  *   mode, value}: the focus modes it lists, the range of its focus distance, and what it is set to now (null where unknown)
  */
-export function createCamera({ onFrame, onUnavailable, cameraRefusal = null, fit = "stretch", onCamera = () => {} }) {
+export function createCamera({ onFrame, onUnavailable, cameraRefusal = null, fit = "cover", onCamera = () => {} }) {
   if (fit !== "stretch" && fit !== "cover") throw new Error('createCamera(): fit must be "stretch" or "cover".');
   let wanted = null;                          // {width, height} while the sketch wants frames, else null
   let camera = null;                          // {stream, video} once opened
@@ -79,6 +80,7 @@ export function createCamera({ onFrame, onUnavailable, cameraRefusal = null, fit
 
   // What the track offers for focus, and its setting now, or null when it offers none a person can use.
   function focusInfo(track) {
+    if (track?.getSettings?.().facingMode === "user") return null;   // D-156: a front camera lists focus but does not use it
     const capabilities = track?.getCapabilities?.() ?? {};
     const modes = capabilities.focusMode ?? [];
     const range = capabilities.focusDistance;

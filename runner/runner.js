@@ -64,14 +64,14 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  * @param {string} [options.cameraRefusal]  for a host that does not allow the camera (VS Code's panel): why, in a few words; a
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
  * @param {"stretch" | "cover"} [options.fit]  what the page does when the camera's picture has another shape than the size the
- *   sketch asked for: "stretch" (default, as always) scales it to the size; "cover" cuts evenly from the long sides first. A host
+ *   sketch asked for: "cover" (default, D-154) cuts evenly from the long sides first; "stretch" scales it to the size. A host
  *   option; no sketch can set it (D-154)
  * @param {(info: {open: boolean, focus?: object | null}) => void} [options.onCamera]  for a host with a focus control (D-155): called
  *   when the camera opens ({open: true, focus}) and closes ({open: false}); `focus` is null when the camera offers none, else
  *   {modes, distance: {min, max, step} | null, mode, value}. Set the focus with `cameraFocus`
  * @returns {Promise<{info: object, run: Function, check: Function, stop: Function, keep: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, onModel, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null, fit = "stretch", onCamera }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, onModel, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null, fit = "cover", onCamera }) {
   // S-274, S-276, D-144 e: what `packages` and `install` may hold. Checked first, before anything is made.
   const hostPackages = checkedPackages(packages, install, baseUrl);
   const write = outputWriter(output);
