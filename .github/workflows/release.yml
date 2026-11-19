@@ -1,0 +1,74 @@
+# Makes a funground-web release (S-268, ADR-008) as a DRAFT on GitHub: nothing is public until the maintainer publishes it,
+# and the tag is made only then. Started by hand, never by a push: each release waits for the maintainer.
+#
+# The release holds the runner's scripts (runner/files.json), runtime/ built from one funground commit, the runner's
+# README, LICENSE and release.json (every file with its size and SHA-256, and the funground version built in). Its notes
+# are the version's section of RELEASES.md. Before the draft is made, the zip is unpacked, checked against release.json,
+# and a page that uses nothing but that folder runs a sketch and plain Python in headless Chrome (tools/test_release.py).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The release's version, like 0.1.0 (RELEASES.md must have a section for it)"
+        required: true
+      funground:
+        description: "The funground commit, tag or branch to build into the runtime (a release tag, once funground has one)"
+        required: true
+        default: main
+
+permissions:
+  contents: write            # the draft release; nothing is pushed
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out funground-web
+        uses: actions/checkout@v7
+
+      - name: Check out funground (the runtime's funground)
+        uses: actions/checkout@v7
+        with:
+          repository: funground-hq/funground
+          ref: ${{ inputs.funground }}
+          path: build/funground
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Build the runtime (the wasm wheels from their release, svgelements and pypdf, funground, the examples)
+        run: python tools/build_runtime.py --funground build/funground
+
+      - name: Make the release
+        run: python tools/make_release.py --version "${{ inputs.version }}" --out dist
+
+      - name: Check the zip against release.json, and run a sketch with it alone in Chrome
+        run: |
+          mkdir -p build/unpacked
+          unzip -q "dist/funground-web-${{ inputs.version }}.zip" -d build/unpacked
+          python tools/make_release.py --check "build/unpacked/funground-web-${{ inputs.version }}"
+          python tools/test_release.py "build/unpacked/funground-web-${{ inputs.version }}"
+
+      - name: Keep the files with this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: funground-web-${{ inputs.version }}
+          path: |
+            dist/funground-web-${{ inputs.version }}.zip
+            dist/release.json
+
+      - name: Make the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" --draft --target "${{ github.sha }}" \
+            --title "funground-web ${{ inputs.version }}" --notes-file dist/notes.md \
+            "dist/funground-web-${{ inputs.version }}.zip" dist/release.json
