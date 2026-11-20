@@ -5,7 +5,7 @@ funground it was built with. `tools/make_release.py` takes a release's notes fro
 without one. The release workflow (`.github/workflows/release.yml`) makes a draft; nothing is published until the
 maintainer publishes it.
 
-## 0.1.0 (draft, not released)
+## 0.1.0 (20 November 2026)
 
 The first release: the runner as Play and the github.dev extension use it on 19 November 2026.
 
