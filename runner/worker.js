@@ -76,7 +76,9 @@
 // models worker answers with a message, which this worker handles between two steps, so a result never appears in the middle
 // of a frame: it is pushed into the Session (`push_models` for points, `push_models_mask` for the person's mask), and the
 // sketch's next ml.pose() call reads it. The answer is therefore the newest result the browser has, and may be one frame behind
-// (contract ML3). The mask comes as bytes of the mask's own size (256 x 256); funground (Cairo, in C) stretches it over the picture.
+// (contract ML3). A request says whether the picture is a camera's frame (`moving`): the models worker then follows and steadies the body from
+// one frame to the next (S-328), and a pose answer carries the model's score for each point, which `push_models` hands on as a tuple
+// (body.scores). The mask comes as bytes of the mask's own size (256 x 256); funground (Cairo, in C) stretches it over the picture.
 // ml.words(mic) (S-234) is the same road for sound: a phrase goes out as float32 bytes (`phrase`), the words come back (`push_models_words`).
 // ml.sound(mic) (S-250) sends a window of sound the same way (about twice a second) and gets the model's 521 scores back as float32 bytes
 // (`push_models_sound`); the names are chosen in Python.
@@ -619,13 +621,17 @@ def push_camera(session, pixels, width, height):
     """Hand a camera frame (a Uint8ClampedArray of RGBA) from the page to the session (to_bytes copies it once)."""
     session.push_camera(pixels.to_bytes(), width, height)
 
-def push_models(session, task, key, points, score, width, height):
-    """Hand a model result from the page to the session: points is a Float64Array x0, y0, x1, y1, ... or None for nobody."""
-    flat = None
+def push_models(session, task, key, points, score, width, height, scores=None):
+    """Hand a model result from the page to the session: points is a Float64Array x0, y0, x1, y1, ... or None for nobody; scores
+    (the pose only) is a Float64Array with how sure the model is of each point, or None (S-328)."""
+    flat = sure = None
     if points is not None:
         flat = array("d")
         flat.frombytes(points.to_bytes())
-    session.push_models(task, key, flat, score, width, height)
+    if scores is not None:
+        sure = array("d")
+        sure.frombytes(scores.to_bytes())
+    session.push_models(task, key, flat, score, width, height, tuple(sure) if sure is not None else None)
 
 def push_models_mask(session, task, key, mask, mask_width, mask_height, width, height):
     """Hand the person's mask from the page to the session: mask is a Uint8Array of mask_width * mask_height bytes (to_bytes copies it once)."""
@@ -894,8 +900,8 @@ function startModelsWorker() {
       } else if (message.type === "result" && message.mask) {
         if (session) py.globals.get("push_models_mask")(session, message.task, message.key, message.mask, message.maskWidth, message.maskHeight, message.width, message.height);
       } else if (message.type === "result") {
-        // `points ?? undefined`: Pyodide turns a JavaScript null into its own null object, and funground wants None
-        if (session) py.globals.get("push_models")(session, message.task, message.key, message.points ?? undefined, message.score, message.width, message.height);
+        // `?? undefined`: Pyodide turns a JavaScript null into its own null object, and funground wants None
+        if (session) py.globals.get("push_models")(session, message.task, message.key, message.points ?? undefined, message.score, message.width, message.height, message.scores ?? undefined);
       } else if (message.type === "say") {
         post({ type: "output", stream: "stdout", text: message.text, models: true });   // the download line: a page with onModel shows it itself
       } else if (message.type === "model") {
@@ -904,7 +910,7 @@ function startModelsWorker() {
         session?.models_unavailable(message.task, message.reason);
       }
     } catch (error) {
-      post({ type: "output", stream: "stderr", text: `A model answer could not be used: ${String(error.message ?? error).split("\n").pop()}` });
+      post({ type: "output", stream: "stderr", text: `A model answer could not be used: ${String(error.message ?? error).trimEnd().split("\n").pop()}` });
     }
   };
   modelsWorker.onerror = (e) => post({ type: "output", stream: "stderr", text: `The models worker failed to load: ${e.message}` });
