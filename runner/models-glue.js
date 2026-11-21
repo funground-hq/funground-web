@@ -22,7 +22,14 @@ export const DETECTOR_MIN_SCORE = 0.5;     // the detector's best score, after t
 export const POSE_MIN_SCORE = 0.5;         // the pose landmark model's "there is a body" score
 export const HAND_MIN_SCORE = 0.8;         // the hand landmark model's "there is a hand" score
 export const REUSE_MIN_SCORE = 0.9;        // a box is reused for the next picture only if the landmarks found in it scored this well
-export const REUSE_LIMIT = 10;             // ... and for at most this many pictures in a row, then the detector looks again
+export const REUSE_LIMIT = 10;             // ... and for at most this many pictures in a row, then the detector looks again (a region
+                                           // that follows a body in a camera's pictures has no limit: it does not go stale)
+
+// ---- steadying a body in a camera's pictures: MediaPipe's one-euro filters, with its pose settings (S-328; the same numbers as _glue.py)
+export const POINTS_SMOOTHING = [0.05, 80.0];    // the 33 points: [how steadily a still point is held, in hertz; how quickly the
+                                                 // smoothing lets go as it moves, per body size a second]
+export const REGION_SMOOTHING = [0.01, 10.0];    // the region the next picture is looked at in: steadier, so it does not wander
+export const SPEED_CUTOFF = 1.0;                 // how much the speed itself is smoothed (hertz)
 
 // ---- cutting a square out of the picture
 
@@ -182,17 +189,31 @@ export const bodyRegion = (detection) => [detection.keyPoints[0], detection.keyP
 export const handRegion = (detection) => [detection.box, detection.keyPoints[0], detection.keyPoints[2]];
 
 /** The body's 33 points in the square around `region`, or null when the score is under POSE_MIN_SCORE.
- *  The model gives 39 rows of (x, y, depth, visible, present); the first 33 are the body, the last 6 are tracking helpers. */
+ *  The model gives 39 rows of (x, y, depth, visible, present); the first 33 are the body, the last 6 are helpers. Rows 33 and 34 are
+ *  the middle of the hips and a point on the circle round the body, like the detector's key points: they are the region to look in for
+ *  the next picture, so the square follows the body as MediaPipe's does. The "visible" column, after a sigmoid, is how sure the model
+ *  is of each point (MediaPipe's "visibility"): low for a hidden limb whose place it guessed (S-328). Returns {points, score,
+ *  region, scores}: `region` is [[x, y], [x, y]] in the picture's pixels, `scores` a Float64Array of `count` numbers from 0 to 1.
+ *  (The twin of `body_landmarks` in _glue.py.) */
 export async function bodyLandmarks(ort, session, picture, [[x0, y0], [x1, y1]], count = 33) {
   const radius = Math.hypot(x1 - x0, y1 - y0);
   const crop = regionOfInterest(picture, [x0, y0, 2 * radius, 2 * radius], [x0, y0], [x1, y1], 1.25, 0, 256);
   const outputs = await run(ort, session, toTensor(crop.pixels, 256), [1, 256, 256, 3]);
   const score = outputs[session.outputNames[1]].data[0];
   if (score < POSE_MIN_SCORE) return null;
-  const rows = outputs[session.outputNames[0]].data, xy = new Float64Array(count * 2);
-  for (let i = 0; i < count; i++) xy.set([rows[i * 5], rows[i * 5 + 1]], i * 2);
-  return { points: crop.toPicture(xy), score: Math.min(score, 1) };
+  const rows = outputs[session.outputNames[0]].data, xy = new Float64Array(BODY_ROWS * 2);
+  for (let i = 0; i < BODY_ROWS; i++) xy.set([rows[i * 5], rows[i * 5 + 1]], i * 2);
+  const points = crop.toPicture(xy);
+  const scores = new Float64Array(count);
+  for (let i = 0; i < count; i++) scores[i] = sigmoid(rows[i * 5 + 3]);
+  return {
+    points: points.slice(0, count * 2),
+    score: Math.min(score, 1),
+    region: [[points[66], points[67]], [points[68], points[69]]],          // rows 33 and 34
+    scores,
+  };
 }
+const BODY_ROWS = 39;                      // the pose model's rows: the 33 points of the body, then the 6 helpers
 
 /** The hand's 21 points in the square around `region`, or null when the score is under HAND_MIN_SCORE. */
 export async function handLandmarks(ort, session, picture, [box, keyFrom, keyTo], count = 21) {
@@ -205,34 +226,41 @@ export async function handLandmarks(ort, session, picture, [box, keyFrom, keyTo]
   return { points: crop.toPicture(xy), score: Math.min(score, 1) };
 }
 
-// ---- tracking: the box of the last picture, reused
+// ---- tracking: the region of the last picture, reused or followed
 
 /**
  * The region found for the last picture of one source, so the detector need not run for every picture.
  *
- * The region is reused for the next picture only while the landmarks found in it scored at least REUSE_MIN_SCORE, and for at
- * most REUSE_LIMIT pictures in a row; then, or when a reused region does not do, the detector looks again. A new picture size
- * starts again. (The same rule as `Tracker` in _glue.py.)
+ * The region is reused for the next picture only while the landmarks found in it scored at least REUSE_MIN_SCORE; when a reused
+ * region does not do, the detector looks again. A new picture size starts again. (The same rule as `Tracker` in _glue.py.)
+ *
+ * Which region is kept depends on `follow`. Without it the detector's box is kept, for at most REUSE_LIMIT pictures in a row, so a
+ * body or hand that moved a long way is found again: the "box reused" mode of the S-231 spike, and what a photo gets. With it (a
+ * body in a camera's pictures) the region the landmarks give for the next picture is kept, steadied by `follow`: the square
+ * follows the body from picture to picture, as MediaPipe's does (S-328), and never goes stale.
  */
 export class Tracker {
   constructor() {
     this.region = null;
+    this.follows = false;                  // the region came from the last landmarks, not from the detector
     this.reused = 0;
     this.size = null;
   }
 
   forget() {
     this.region = null;
+    this.follows = false;
     this.reused = 0;
   }
 
   canReuse() {
-    return this.region !== null && this.reused < REUSE_LIMIT;
+    return this.region !== null && (this.follows || this.reused < REUSE_LIMIT);
   }
 
   /** The landmarks in a picture of `width` x `height`. `detectRegion()` gives a new region (or null for nobody);
-   *  `landmarks(region)` gives the points in a region (or null when the score is too low). Both may be async. */
-  async find(width, height, detectRegion, landmarks) {
+   *  `landmarks(region)` gives the points in a region (or null when the score is too low); `follow(next region)`, when given,
+   *  gives the region to keep from the one the landmarks give. All may be async except `follow`. */
+  async find(width, height, detectRegion, landmarks, follow = null) {
     if (this.size?.[0] !== width || this.size?.[1] !== height) {
       this.forget();
       this.size = [width, height];
@@ -241,6 +269,7 @@ export class Tracker {
       const found = await landmarks(this.region);
       if (found !== null && found.score >= REUSE_MIN_SCORE) {
         this.reused++;
+        this.keep(this.region, found, follow);
         return found;
       }
     }
@@ -251,12 +280,102 @@ export class Tracker {
     }
     const found = await landmarks(region);
     if (found !== null && found.score >= REUSE_MIN_SCORE) {
-      this.region = region;
       this.reused = 0;
+      this.keep(region, found, follow);
     } else {
       this.forget();
     }
     return found;
+  }
+
+  keep(region, found, follow) {
+    this.follows = follow !== null && !!found.region;
+    this.region = this.follows ? follow(found.region) : region;
+  }
+}
+
+// ---- steadying: a body in a camera's pictures, held still where it keeps still
+
+/** How far a low-pass filter with this cutoff (hertz) moves towards a new value after `seconds`. */
+const alpha = (cutoff, seconds) => 1 / (1 + 1 / (2 * Math.PI * cutoff * seconds));
+
+/** The clock the filters use by default: seconds, going only forward (`time.monotonic` in _glue.py). */
+const now = () => performance.now() / 1000;
+
+/**
+ * A one-euro filter on every coordinate of some points, as MediaPipe uses for a body in a camera's pictures. (The twin of
+ * `Smoother` in _glue.py; the points are a flat Float64Array x0, y0, x1, y1, ...)
+ *
+ * It smooths a lot while a point keeps still (the model's small shake from picture to picture goes) and hardly at all while it
+ * moves fast (a waved hand is not left behind). Speeds are measured in sizes a second (the mean side of the points' box), so a body
+ * far from the camera is smoothed as one near it is. After a gap of more than `gap` seconds, or for points of another shape, it
+ * starts afresh.
+ */
+export class Smoother {
+  constructor(minCutoff, beta, clock = now, gap = 0.5) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.clock = clock;
+    this.gap = gap;
+    this.reset();
+  }
+
+  /** Start afresh: the next points are given as they are. */
+  reset() {
+    this.points = null;
+    this.speed = null;
+    this.time = 0;
+  }
+
+  /** The smoothed `points`, seen now. */
+  smooth(points) {
+    const time = this.clock();
+    const seconds = time - this.time;
+    if (this.points === null || this.points.length !== points.length || !(seconds > 0 && seconds <= this.gap)) {
+      this.points = Float64Array.from(points);
+      this.speed = new Float64Array(points.length);
+      this.time = time;
+      return Float64Array.from(points);
+    }
+    // the size: the mean of the x extent and the y extent of the points (numpy's mean of ptp over the columns)
+    const low = [Infinity, Infinity], high = [-Infinity, -Infinity];
+    for (let i = 0; i < points.length; i++) {
+      low[i % 2] = Math.min(low[i % 2], points[i]);
+      high[i % 2] = Math.max(high[i % 2], points[i]);
+    }
+    const size = Math.max((high[0] - low[0] + high[1] - low[1]) / 2, 1e-6);
+    const smoothSpeed = alpha(SPEED_CUTOFF, seconds);
+    for (let i = 0; i < points.length; i++) {
+      const speed = (points[i] - this.points[i]) / seconds / size;
+      this.speed[i] += smoothSpeed * (speed - this.speed[i]);
+      const cutoff = this.minCutoff + this.beta * Math.abs(this.speed[i]);
+      this.points[i] += alpha(cutoff, seconds) * (points[i] - this.points[i]);
+    }
+    this.time = time;
+    return Float64Array.from(this.points);
+  }
+}
+
+/** What steadies one body in a camera's pictures: its 33 points, and the region the next picture is looked at in.
+ *  (The twin of `Steadier` in _glue.py.) */
+export class Steadier {
+  constructor(clock = now) {
+    this.pointsFilter = new Smoother(...POINTS_SMOOTHING, clock);
+    this.regionFilter = new Smoother(...REGION_SMOOTHING, clock);
+  }
+
+  reset() {
+    this.pointsFilter.reset();
+    this.regionFilter.reset();
+  }
+
+  points(points) {
+    return this.pointsFilter.smooth(points);
+  }
+
+  region([[x0, y0], [x1, y1]]) {
+    const steady = this.regionFilter.smooth(Float64Array.of(x0, y0, x1, y1));
+    return [[steady[0], steady[1]], [steady[2], steady[3]]];
   }
 }
 
@@ -342,23 +461,38 @@ const TASKS = {
 
 /**
  * One source's finder for a task, made from the task's sessions (the order of `tasks` in models.json): it keeps that
- * source's state and shares the sessions. `find(picture)` gives
- *   "pose" and "hand": {points, score} (points flat, in the picture's pixels) or null when nobody is there;
+ * source's state and shares the sessions. `find(picture, moving)` gives
+ *   "pose" and "hand": {points, score} (points flat, in the picture's pixels) or null when nobody is there; "pose" also has
+ *     `scores`, a Float64Array of the model's 33 numbers for how sure it is of each point (S-328);
  *   "person": {mask, maskWidth, maskHeight}, never null (the model always gives a mask).
+ * `moving` is true for a camera's picture and false for a still one (the request says which). A body in a moving picture is followed
+ * and steadied, as `find_body` does with a camera's frame in _tasks.py: the next region comes from the model's own helper points,
+ * and the region and the 33 points go through one-euro filters that are kept for this source and start afresh when the body is
+ * lost. A hand is never steadied, as on the desktop. `clock` gives seconds, for the filters (a test gives its own).
  */
-export function createFinder(task, ort, sessions) {
+export function createFinder(task, ort, sessions, clock = now) {
   if (task === "person") return { find: (picture) => personMask(ort, sessions[0], picture) };
   const [detectorSession, landmarkSession] = sessions;
   const { detector, region, landmarks } = TASKS[task];
   const tracker = new Tracker();
+  const steadier = task === "pose" ? new Steadier(clock) : null;
   return {
-    find: (picture) => tracker.find(
-      picture.width, picture.height,
-      async () => {
-        const detection = await detect(ort, detectorSession, picture, detector);
-        return detection === null ? null : region(detection);
-      },
-      (found) => landmarks(ort, landmarkSession, picture, found)),
+    find: async (picture, moving = false) => {
+      const steady = moving ? steadier : null;
+      const found = await tracker.find(
+        picture.width, picture.height,
+        async () => {
+          const detection = await detect(ort, detectorSession, picture, detector);
+          return detection === null ? null : region(detection);
+        },
+        (where) => landmarks(ort, landmarkSession, picture, where),
+        steady ? (next) => steady.region(next) : null);
+      if (found === null) {
+        steady?.reset();
+        return null;
+      }
+      return steady ? { ...found, points: steady.points(found.points) } : found;
+    },
   };
 }
 

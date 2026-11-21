@@ -7,8 +7,9 @@
 //
 //   worker.js -> here
 //     init   {onnxruntimeUrl, tableUrl, glueUrl}   where onnxruntime-web is (a folder), the table of model files (models.json) and models-glue.js
-//     frame  {task, key, pixels, width, height}    find the "pose", "hand" or "person" in these RGBA bytes (an ArrayBuffer, transferred);
-//                                                  `key` is the source they came from. For "picture_mobilenet" and "picture_dinov2" (S-235)
+//     frame  {task, key, pixels, width, height, moving}   find the "pose", "hand" or "person" in these RGBA bytes (an ArrayBuffer, transferred);
+//                                                  `key` is the source they came from; `moving` is true for a camera's frame, false for a still
+//                                                  picture: only a camera's body is followed and steadied (S-328, as funground-ml does). For "picture_mobilenet" and "picture_dinov2" (S-235)
 //                                                  the pixels are one picture to turn into a vector, and `key` is a job number, not a
 //                                                  source: many may be in flight, each is answered, in order
 //     phrase {task, key, rate, samples}            hear the "words" in this phrase, or name the "sound" in this window: `samples` is an
@@ -17,8 +18,10 @@
 //     close  {}                                    the run ended: forget every source (the loaded models stay)
 //
 //   here -> worker.js
-//     result      {task, key, points, score, width, height}   "pose" and "hand": `points` is a Float64Array x0, y0, x1, y1, ... in
-//                                                  the picture's pixels (its buffer is transferred), or null when nobody is there
+//     result      {task, key, points, score, width, height, scores}   "pose" and "hand": `points` is a Float64Array x0, y0, x1, y1, ... in
+//                                                  the picture's pixels (its buffer is transferred), or null when nobody is there; `scores` (the
+//                                                  pose only, else null) is a Float64Array of how sure the model is of each point, 0 to 1
+//                                                  (S-328; its buffer is transferred)
 //     result      {task, key, mask, maskWidth, maskHeight, width, height}   "person": `mask` is a Uint8Array of the mask's own
 //                                                  size (256 x 256, its buffer is transferred): 0 is not the person, 255 is
 //     result      {task: "words", key, text, score}   the words heard ("" for none) and the mean probability of the pieces chosen
@@ -49,7 +52,7 @@ const post = (message, transfer = []) => postMessage(message, transfer);
 let settings = null;                  // {onnxruntimeUrl, tableUrl, glueUrl}
 let loaded = null;                    // Promise of {ort, glue, table}: the library, started on the first frame
 const tasks = new Map();              // task -> Promise of the task's files (two sessions for "pose" and "hand", one for "person", two sessions and the token table for "words")
-const finders = new Map();            // "task:key" -> that source's finder (it keeps the box to reuse)
+const finders = new Map();            // "task:key" -> that source's finder (it keeps the region to reuse or follow, and the filters that steady a body)
 const pictures = new Map();           // task -> that picture model, made once (it keeps nothing between pictures)
 let queue = Promise.resolve();        // frames are worked on one at a time, in the order they came
 
@@ -199,21 +202,23 @@ function sessionsFor(task) {
 
 // ---- finding
 
-async function find({ task, key, pixels, width, height }) {
+async function find({ task, key, pixels, width, height, moving = false }) {
   if (PICTURES.includes(task)) return vector({ task, key, pixels, width, height });
   try {
     const { ort, glue } = await library();
     const sessions = await sessionsFor(task);
     const id = `${task}:${key}`;
     if (!finders.has(id)) finders.set(id, glue.createFinder(task, ort, sessions));
-    const found = await finders.get(id).find({ rgba: new Uint8Array(pixels), width, height });
+    const found = await finders.get(id).find({ rgba: new Uint8Array(pixels), width, height }, moving === true);
     if (task === "person") {
       const { mask, maskWidth, maskHeight } = found;
       post({ type: "result", task, key, mask, maskWidth, maskHeight, width, height }, [mask.buffer]);
       return;
     }
     const points = found === null ? null : found.points;
-    post({ type: "result", task, key, points, score: found === null ? 0 : found.score, width, height }, points ? [points.buffer] : []);
+    const scores = found?.scores ?? null;                 // the pose model's, one for each point; a hand has none
+    post({ type: "result", task, key, points, score: found === null ? 0 : found.score, width, height, scores },
+      [...(points ? [points.buffer] : []), ...(scores ? [scores.buffer] : [])]);
   } catch (error) {
     unavailable(task, error);
   }
