@@ -488,6 +488,8 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             fatal["ordinary"]["ended"] == "error" and fatal["restartsAfterOrdinary"] == 0
             and fatal["crash"]["ended"] == "error" and fatal["restarts"] == 1
             and fatal["next"]["ended"] == "ended" and "alive 42" in fatal["next"]["output"])
+        checks["fatal: onRestart says why (failed) and its ready resolves when the new Python has loaded"] = (
+            fatal.get("reason") == "failed" and fatal.get("readied") == "loaded")
     return checks
 
 

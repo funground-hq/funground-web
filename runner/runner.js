@@ -29,9 +29,10 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  * @param {boolean} [options.prewarm]  start the next run's worker as soon as a run ends (default true); false starts it at the next run(), which then waits for Python to load
  * @param {(count: number) => void} [options.onFrame]  after each frame is drawn (1 is the first of the run)
  * @param {(reason: "ended" | "error" | "stopped") => void} [options.onFinish]  when a run ends, however it ends
- * @param {() => void} [options.onRestart]  with `reuse`: a run did not stop within STOP_WAIT_MS, or its Python failed fatally
- *   (a wasm trap, out of memory: S-333), so its worker was ended and a new one (a new Python) is loading; the next run waits
- *   for it, which takes seconds. A page can say so
+ * @param {(restart: {reason: "stop" | "failed", ready: Promise<void>}) => void} [options.onRestart]  with `reuse`: a run did not
+ *   stop within STOP_WAIT_MS ("stop"), or its Python failed fatally ("failed": a wasm trap, out of memory, S-333), so its worker
+ *   was ended and a new one (a new Python) is loading; the next run waits for it, which takes seconds. `ready` resolves when the
+ *   new Python has loaded (rejects if it fails to). A page can say why it waits, and when the wait is over
  * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
  * @param {(file: {name: string, bytes: Uint8Array, type: string}) => void} [options.onFile]  a file the sketch wrote in its folder
  *   (f.save, save_gif, a plain open() ...): new or changed since the run began (a file passed in `files` only when the sketch rewrites it). Called after the frame (or
@@ -164,8 +165,17 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     slot.stopped = null;
     if (!stopped && worker === slot) {
       replaceWorker();
-      onRestart?.();
+      restarted("stop");
     }
+  }
+
+  // A new Python is loading in place of one that cannot go on. The page hears why, and when the new one has loaded (`ready`
+  // resolves) or failed to (it rejects), so it can say the wait is over. Without prewarm nothing loads until the next run, and
+  // `ready` resolves at once.
+  function restarted(reason) {
+    const ready = worker ? worker.ready.then(() => {}) : Promise.resolve();
+    ready.catch(() => {});                                         // a page that does not wait on it is not told twice
+    onRestart?.({ reason, ready });
   }
 
   // ---- messages from the worker
@@ -176,8 +186,9 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       case "error":
         write(message.message, "stderr");
         if (!message.fatal) { finish("error"); break; }
-        finish("error", { keepWorker: false });                  // its Python is dead (S-333): a new one loads for the next run
-        if (reuse) onRestart?.();
+        finish("error", { keepWorker: true });                   // its Python is dead (S-333): a new one loads for the next run,
+        replaceWorker();                                         // also when no run was in progress (a file saved after the end)
+        if (reuse) restarted("failed");
         break;
       case "frame": if (run) drawFrame(message); break;           // a stopped run's last frames are not drawn
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
