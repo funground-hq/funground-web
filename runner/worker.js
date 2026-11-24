@@ -950,9 +950,10 @@ function fail(error) {
 }
 
 // After a fatal error inside Pyodide (a wasm trap, out of memory) every later call fails with "Pyodide already fatally failed":
-// this worker can never run again, and the runner must replace it (S-333).
+// this worker can never run again, and the runner must replace it (S-333). A Python exception from the probe means Python is
+// alive: on an isolated page the stop signal may still be raised (S-241), and the probe then gets a KeyboardInterrupt.
 function pythonAlive() {
-  try { py.runPython("None"); return true; } catch { return false; }
+  try { py.runPython("None"); return true; } catch (error) { return error instanceof py.ffi.PythonError; }
 }
 
 // ---- files the sketch wrote (S-212)

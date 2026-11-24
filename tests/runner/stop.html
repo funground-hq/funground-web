@@ -16,13 +16,13 @@ const report = { isolated: globalThis.crossOriginIsolated, runs: {} };
 
 try {
   const out = [];
-  let ended = null, frames = 0, restarts = 0;
+  let ended = null, frames = 0, restarts = 0, reason = null;
   const runner = await createRunner({
     canvas: document.getElementById("canvas"), baseUrl: new URL("/runner/", location.href), reuse: true,
     output: (text) => out.push(text),
     onFrame: (n) => { frames = n; },
     onFinish: (reason) => { ended = reason; },
-    onRestart: () => { restarts++; },
+    onRestart: (restart) => { restarts++; reason = restart.reason; },
   });
   const until = async (condition, ms, what) => {
     const end = performance.now() + ms;
@@ -51,7 +51,7 @@ try {
     out.length = 0; ended = null;
     const next = await runner.run(`print("next after ${name}")\n`, { filename: "next.py" });
     await until(() => ended !== null, 60000, "the next sketch to end");
-    report.runs[name] = { stopMs, restarted: restarts - beforeRestarts, learnerSaw, nextOk: next.ok, nextOutput: out.join(""),
+    report.runs[name] = { stopMs, restarted: restarts - beforeRestarts, reason, learnerSaw, nextOk: next.ok, nextOutput: out.join(""),
       nextMs: Math.round(performance.now() - t2) };
   }
   runner.stop();

@@ -517,7 +517,7 @@ def check_stop_pages(isolated: dict | None, plain: dict | None) -> dict[str, boo
             run and clean(run) and run["nextOk"] and run["nextOutput"] == f"next after {name}")
         run = plain.get("runs", {}).get(name)
         checks[f"stop (not isolated): a busy {name} still waits, then ends its worker, and the next sketch runs"] = bool(
-            run and run["stopMs"] >= 900 and run["restarted"] == 1 and clean(run) and run["nextOk"]
+            run and run["stopMs"] >= 900 and run["restarted"] == 1 and run["reason"] == "stop" and clean(run) and run["nextOk"]
             and run["nextOutput"] == f"next after {name}")
     return checks
 
