@@ -946,7 +946,13 @@ function fail(error) {
   const message = String(error.message ?? error).replace(/^ {2}File "<runner>", line \d+, in .*\n(?: {4}.*\n)*/gm, "");
   const first = message.indexOf(`File "${sketchFile}"`);
   const trimmed = first < 0 ? message : "Traceback (most recent call last):\n  " + message.slice(first);
-  post({ type: "error", message: trimmed });
+  post({ type: "error", message: trimmed, fatal: !pythonAlive() });
+}
+
+// After a fatal error inside Pyodide (a wasm trap, out of memory) every later call fails with "Pyodide already fatally failed":
+// this worker can never run again, and the runner must replace it (S-333).
+function pythonAlive() {
+  try { py.runPython("None"); return true; } catch { return false; }
 }
 
 // ---- files the sketch wrote (S-212)
