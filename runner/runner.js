@@ -29,8 +29,9 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  * @param {boolean} [options.prewarm]  start the next run's worker as soon as a run ends (default true); false starts it at the next run(), which then waits for Python to load
  * @param {(count: number) => void} [options.onFrame]  after each frame is drawn (1 is the first of the run)
  * @param {(reason: "ended" | "error" | "stopped") => void} [options.onFinish]  when a run ends, however it ends
- * @param {() => void} [options.onRestart]  with `reuse`: a run did not stop within STOP_WAIT_MS, so its worker was ended and a
- *   new one (a new Python) is loading; the next run waits for it, which takes seconds. A page can say so
+ * @param {() => void} [options.onRestart]  with `reuse`: a run did not stop within STOP_WAIT_MS, or its Python failed fatally
+ *   (a wasm trap, out of memory: S-333), so its worker was ended and a new one (a new Python) is loading; the next run waits
+ *   for it, which takes seconds. A page can say so
  * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
  * @param {(file: {name: string, bytes: Uint8Array, type: string}) => void} [options.onFile]  a file the sketch wrote in its folder
  *   (f.save, save_gif, a plain open() ...): new or changed since the run began (a file passed in `files` only when the sketch rewrites it). Called after the frame (or
@@ -172,7 +173,12 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   function handle(message) {
     switch (message.type) {
       case "output": if (!(message.models && onModel)) write(message.text, message.stream); break;   // with onModel the page shows downloads itself
-      case "error": write(message.message, "stderr"); finish("error"); break;
+      case "error":
+        write(message.message, "stderr");
+        if (!message.fatal) { finish("error"); break; }
+        finish("error", { keepWorker: false });                  // its Python is dead (S-333): a new one loads for the next run
+        if (reuse) onRestart?.();
+        break;
       case "frame": if (run) drawFrame(message); break;           // a stopped run's last frames are not drawn
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
       case "kept": keeping.get(message.id)?.(message); break;

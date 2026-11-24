@@ -482,6 +482,12 @@ def check_scenarios(scenarios: dict) -> dict[str, bool]:
             keeps["scriptOk"] and ended.get("ok") is True and "studio/001.png" in ended["files"] and "studio/001.png" in keeps["endedNames"])
         checks["keep: a stopped sketch answers 'not running' and writes nothing"] = (
             stopped.get("ok") is False and "not running" in stopped["reason"] and not keeps["stoppedFiles"])
+    fatal = scenarios.get("fatal")
+    if fatal:
+        checks["fatal: after Python fails fatally a reused runner says onRestart once and the next run works (S-333)"] = (
+            fatal["ordinary"]["ended"] == "error" and fatal["restartsAfterOrdinary"] == 0
+            and fatal["crash"]["ended"] == "error" and fatal["restarts"] == 1
+            and fatal["next"]["ended"] == "ended" and "alive 42" in fatal["next"]["output"])
     return checks
 
 

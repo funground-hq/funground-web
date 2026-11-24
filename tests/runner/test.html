@@ -625,6 +625,31 @@ f.show()
 }
 
 }
+
+log('fatal');
+// ---- A Python that fails fatally (S-333): a wasm trap leaves Pyodide unusable. A reused runner (Play's preview) must not keep that
+// worker: it says onRestart, and the next run gets a new Python and works.
+{
+  let restarts = 0, ended = null;
+  const out = [];
+  const runner = await createRunner({
+    canvas: document.createElement("canvas"), baseUrl: new URL("/runner/", location.href), reuse: true,
+    output: (text) => out.push(text), onFinish: (reason) => { ended = reason; }, onRestart: () => { restarts += 1; },
+  });
+  const run = async (source) => {
+    out.length = 0; ended = null;
+    await runner.run(source, { filename: "main.py" });
+    await until(() => ended !== null, 60000, "the script to end").catch(() => {});
+    await sleep(100);
+    return { ended, output: out.join("") };
+  };
+  const ordinary = await run("1 / 0\n");                         // an ordinary error keeps the worker
+  const restartsAfterOrdinary = restarts;
+  const crash = await run("import ctypes\nctypes.CFUNCTYPE(None)(0)()\n");     // a call through a null function pointer: a wasm trap
+  const next = await run("print('alive', 6 * 7)\n");
+  report.scenarios.fatal = { ordinary, restartsAfterOrdinary, crash, restarts, next };
+  runner.stop();
+}
 // ---- a different backing scale is the page's business (devicePixelRatio); report what this run used
 report.scenarios.dpr = window.devicePixelRatio;
 report.page_resources = performance.getEntriesByType("resource").map((e) => ({ name: e.name, bytes: e.encodedBodySize }));
