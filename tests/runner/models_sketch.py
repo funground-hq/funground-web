@@ -20,7 +20,10 @@ def draw():
     found = find(picture)
     if found:
         points = {name: [round(point.x, 3), round(point.y, 3)] for name, point in found.points.items()}
-        print("points " + json.dumps({"score": round(found.score, 4), "points": points}))
+        shown = {"score": round(found.score, 4), "points": points}
+        if TASK == "pose":                 # S-328: how sure the model is of each point (a hand has none)
+            shown["scores"] = {name: round(value, 5) for name, value in found.scores.items()}
+        print("points " + json.dumps(shown))
         f.stop()
     elif f.frame_count >= LIMIT:
         print("points none")

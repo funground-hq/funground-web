@@ -265,14 +265,21 @@ def kept_web_fonts(folder: Path, names: set[str]) -> set[str]:
     return kept | {"fonts/sources.json"} if kept else set()
 
 
+def helper_modules(path: Path) -> set[str]:
+    """The files beside an example that it imports (``from puppet import Puppet`` finds ``puppet.py``), found as
+    funground's gallery finds them (funground/gallery.py, helper_files(), S-321). Play opens each as a second file."""
+    names = re.findall(r"^\s*(?:from|import)\s+(\w+)", path.read_text(encoding="utf-8"), re.MULTILINE)
+    return {f"{name}.py" for name in names if (path.parent / f"{name}.py").is_file() and f"{name}.py" != path.name}
+
+
 def example_entry(path: Path, examples_root: Path) -> dict:
-    """One index row: id, title (first docstring line), source path, and the data files its code names (and the kept
-    copy of a font it loads by address)."""
+    """One index row: id, title (first docstring line), source path, and the data files its code names, the files it
+    imports from beside it (and the kept copy of a font it loads by address)."""
     source = path.read_text(encoding="utf-8")
     docstring = ast.get_docstring(ast.parse(source)) or path.stem
     names = re.findall(r"""["']([^"'\n]+)["']""", source)
     files = {n for n in names if (path.parent / n).is_file() and (path.parent / n) != path}
-    files = sorted(files | kept_web_fonts(path.parent, set(names)))
+    files = sorted(files | helper_modules(path) | kept_web_fonts(path.parent, set(names)))
     relative = path.relative_to(examples_root)
     return {"id": f"{relative.parts[-2]}-{path.stem}", "title": docstring.splitlines()[0],
             "source": relative.as_posix(), "files": files}
@@ -283,9 +290,12 @@ def copy_examples(root: Path, out: Path) -> int:
     examples_root = root / "examples"
     index = []
     for folder in EXAMPLE_FOLDERS:
-        for path in sorted((examples_root / folder).rglob("*.py")):
-            if "data" in path.parts or "fonts" in path.parts:
-                continue                                         # helper scripts beside the data, not examples
+        paths = [p for p in sorted((examples_root / folder).rglob("*.py"))
+                 if "data" not in p.parts and "fonts" not in p.parts]    # helper scripts beside the data, not examples
+        imported = {p.parent / name for p in paths for name in helper_modules(p)}
+        for path in paths:
+            if path in imported:
+                continue                                         # a file the examples import (puppet.py), not an example
             entry = example_entry(path, examples_root)
             for target in [entry["source"]] + [f"{Path(entry['source']).parent.as_posix()}/{n}" for n in entry["files"]]:
                 (out / target).parent.mkdir(parents=True, exist_ok=True)

@@ -17,8 +17,11 @@ const KEY_NAMES = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", Arrow
 const MOUSE_BUTTONS = ["left", "center", "right"];                 // MouseEvent.button 0, 1, 2
 const WHEEL_NOTCH = 100;                                          // deltaY pixels in one notch of a wheel
 // With `reuse`: how long a run may take to stop before its worker is ended and a new Python started. A sketch answers
-// between two frames, so a busy frame or a slow setup() needs more than a moment; a new Python costs seconds.
+// between two frames, so a busy frame or a slow setup() needs more than a moment; a new Python costs seconds. (On a
+// cross-origin isolated page a busy sketch is interrupted and answers at once; this wait is for the pages that are not.)
 const STOP_WAIT_MS = 1000;
+const SIGINT = 2;                                                  // what Pyodide's interrupt buffer takes to raise a KeyboardInterrupt
+const INTERRUPT_REPEAT_MS = 100;                                  // an isolated page raises the signal again this often until the worker answers
 const KEEP_WAIT_MS = 10000;                                       // how long keep() waits for the sketch's answer (S-226)
 
 /**
@@ -29,8 +32,10 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  * @param {boolean} [options.prewarm]  start the next run's worker as soon as a run ends (default true); false starts it at the next run(), which then waits for Python to load
  * @param {(count: number) => void} [options.onFrame]  after each frame is drawn (1 is the first of the run)
  * @param {(reason: "ended" | "error" | "stopped") => void} [options.onFinish]  when a run ends, however it ends
- * @param {() => void} [options.onRestart]  with `reuse`: a run did not stop within STOP_WAIT_MS, so its worker was ended and a
- *   new one (a new Python) is loading; the next run waits for it, which takes seconds. A page can say so
+ * @param {(restart: {reason: "stop" | "failed", ready: Promise<void>}) => void} [options.onRestart]  with `reuse`: a run did not
+ *   stop within STOP_WAIT_MS ("stop"), or its Python failed fatally ("failed": a wasm trap, out of memory, S-333), so its worker
+ *   was ended and a new one (a new Python) is loading; the next run waits for it, which takes seconds. `ready` resolves when the
+ *   new Python has loaded (rejects if it fails to). A page can say why it waits, and when the wait is over
  * @param {(message: object) => void} [options.onSound]  every sound command the sketch makes ({command, voice, fields, samples}), before it is played; for tests and tools
  * @param {(file: {name: string, bytes: Uint8Array, type: string}) => void} [options.onFile]  a file the sketch wrote in its folder
  *   (f.save, save_gif, a plain open() ...): new or changed since the run began (a file passed in `files` only when the sketch rewrites it). Called after the frame (or
@@ -57,15 +62,22 @@ const KEEP_WAIT_MS = 10000;                                       // how long ke
  *   re-running on every edit) starts at once instead of waiting for Python to load; costs a second Python's memory (default false)
  * @param {boolean} [options.reuse]  run the next sketch in the same worker when the last one has ended or stops when asked
  *   (funground's Session starts each sketch afresh); a sketch that does not stop within STOP_WAIT_MS (`while True:`) still
- *   has its worker ended (D-083); default false (one worker per run, as before)
+ *   has its worker ended (D-083), unless the page is cross-origin isolated: there Stop interrupts Python, a busy sketch stops
+ *   in milliseconds and its worker is kept (D-150 a); default false (one worker per run, as before)
  * @param {string} [options.microphoneRefusal]  for a host that does not allow the microphone (VS Code's panel): the line a sketch
  *   that starts it gets in its output instead; the browser is not asked and the sketch hears nothing (default: none, the
  *   microphone is asked for as usual)
  * @param {string} [options.cameraRefusal]  for a host that does not allow the camera (VS Code's panel): why, in a few words; a
  *   sketch that starts the camera gets "The camera is not available: {cameraRefusal}." in its output and the browser is not asked
+ * @param {"stretch" | "cover"} [options.fit]  what the page does when the camera's picture has another shape than the size the
+ *   sketch asked for: "cover" (default, D-154) cuts evenly from the long sides first; "stretch" scales it to the size. A host
+ *   option; no sketch can set it (D-154)
+ * @param {(info: {open: boolean, focus?: object | null}) => void} [options.onCamera]  for a host with a focus control (D-155): called
+ *   when the camera opens ({open: true, focus}) and closes ({open: false}); `focus` is null when the camera offers none, else
+ *   {modes, distance: {min, max, step} | null, mode, value}. Set the focus with `cameraFocus`
  * @returns {Promise<{info: object, run: Function, check: Function, stop: Function, keep: Function, running: boolean}>}
  */
-export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, onModel, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null }) {
+export async function createRunner({ canvas, output, baseUrl = new URL("./", import.meta.url), prewarm = true, onFrame, onFinish, onRestart, onSound, onFile, onModel, pyodideUrl, onnxruntimeUrl: onnxruntimeOption, runtimeUrl: runtimeOption, packages, install, spare = false, reuse = false, microphoneRefusal = null, cameraRefusal = null, fit = "cover", onCamera }) {
   // S-274, S-276, D-144 e: what `packages` and `install` may hold. Checked first, before anything is made.
   const hostPackages = checkedPackages(packages, install, baseUrl);
   const write = outputWriter(output);
@@ -80,6 +92,8 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     onFrame: (pixels, width, height) => { if (run) worker.worker.postMessage({ type: "camera", pixels, width, height }, [pixels.buffer]); },
     onUnavailable: (reason) => { if (run) worker.worker.postMessage({ type: "camera-unavailable", reason }); },
     cameraRefusal,
+    fit,
+    onCamera,
   });
   // Browsers keep a page silent until the visitor has clicked or pressed a key on it: the first of either, and Run, unlock sound.
   for (const kind of ["pointerdown", "keydown"]) window.addEventListener(kind, audio.unlock, { capture: true, passive: true });
@@ -112,7 +126,10 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
 
   function startWorker() {
     const created = new Worker(workerScript, { type: "module" });
-    const slot = { worker: created, ready: null, loaded: false };
+    // On a cross-origin isolated page Python can be interrupted (D-150 a). Byte 0 is Pyodide's interrupt signal (2 = SIGINT);
+    // byte 1 says the page asked to stop, so the worker does not show the learner the KeyboardInterrupt that follows.
+    const interrupt = globalThis.crossOriginIsolated ? new Int8Array(new SharedArrayBuffer(2)) : null;
+    const slot = { worker: created, ready: null, loaded: false, interrupt };
     slot.ready = new Promise((resolve, reject) => {
       created.onerror = (e) => reject(new Error(`the runner's worker failed to load: ${e.message}`));
       created.onmessage = (e) => {
@@ -124,7 +141,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
       };
     });
     slot.ready.catch(() => {});                                    // reported where it is awaited
-    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts, packages: hostPackages, install });
+    created.postMessage({ type: "init", runtimeUrl, pyodideUrl: pyodide, onnxruntimeUrl: onnxruntime, modelsScripts, packages: hostPackages, install, interrupt: interrupt?.buffer });
     console.debug("runner: worker started");
     return slot;
   }
@@ -151,20 +168,41 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   }
 
   // Stop the run in progress. Without `reuse` its worker is ended at once. With `reuse` the worker is asked to stop the
-  // sketch (its finish() runs); it is ended only if it does not answer in time, being busy in the sketch's own code.
+  // sketch (its finish() runs); it is ended only if it does not answer in time, being busy in the sketch's own code. On an
+  // isolated page a busy sketch is interrupted as well, so it answers at once and its worker is kept.
   async function stopRun() {
     if (!run) return;
     if (!reuse) return finish("stopped");
     const slot = worker;
     const answered = new Promise((resolve) => { slot.stopped = () => resolve(true); });
     finish("stopped", { keepWorker: true });
+    // Pyodide takes the signal by reading byte 0 and then clearing it, in two steps, so a signal that lands between them is lost
+    // (measured: about 1 stop in 50 on a spinning loop). The page therefore keeps the signal raised until the worker answers;
+    // the worker turns interrupts off while the sketch's finish() runs (worker.js, stop()).
+    let raised = null;
+    if (slot.interrupt) {
+      Atomics.store(slot.interrupt, 1, 1);
+      Atomics.store(slot.interrupt, 0, SIGINT);
+      raised = setInterval(() => Atomics.store(slot.interrupt, 0, SIGINT), INTERRUPT_REPEAT_MS);
+    }
     slot.worker.postMessage({ type: "stop" });
     const stopped = await Promise.race([answered, new Promise((resolve) => setTimeout(resolve, STOP_WAIT_MS, false))]);
+    clearInterval(raised);
+    if (slot.interrupt) Atomics.store(slot.interrupt, 0, 0);       // the worker has answered, or is ended: no signal may stay for the next run
     slot.stopped = null;
     if (!stopped && worker === slot) {
       replaceWorker();
-      onRestart?.();
+      restarted("stop");
     }
+  }
+
+  // A new Python is loading in place of one that cannot go on. The page hears why, and when the new one has loaded (`ready`
+  // resolves) or failed to (it rejects), so it can say the wait is over. Without prewarm nothing loads until the next run, and
+  // `ready` resolves at once.
+  function restarted(reason) {
+    const ready = worker ? worker.ready.then(() => {}) : Promise.resolve();
+    ready.catch(() => {});                                         // a page that does not wait on it is not told twice
+    onRestart?.({ reason, ready });
   }
 
   // ---- messages from the worker
@@ -172,7 +210,13 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
   function handle(message) {
     switch (message.type) {
       case "output": if (!(message.models && onModel)) write(message.text, message.stream); break;   // with onModel the page shows downloads itself
-      case "error": write(message.message, "stderr"); finish("error"); break;
+      case "error":
+        write(message.message, "stderr");
+        if (!message.fatal) { finish("error"); break; }
+        finish("error", { keepWorker: true });                   // its Python is dead (S-333): a new one loads for the next run,
+        replaceWorker();                                         // also when no run was in progress (a file saved after the end)
+        if (reuse) restarted("failed");
+        break;
       case "frame": if (run) drawFrame(message); break;           // a stopped run's last frames are not drawn
       case "sound": if (run) { onSound?.(message); audio.command(message); } break;
       case "kept": keeping.get(message.id)?.(message); break;
@@ -301,6 +345,7 @@ export async function createRunner({ canvas, output, baseUrl = new URL("./", imp
     keep: keepRun,                       // keep(note): the picture, a copy of the code and a record, as files (see keepRun)
     audioState: () => audio.state(),     // sound unlocked? what each voice is doing? microphone open? (for tests and tools)
     cameraState: () => camera.state(),   // the camera open, and wanted by the sketch? (for tests and tools)
+    cameraFocus: (setting) => camera.focus(setting),   // {mode: "auto"} or {mode: "manual", distance}: a promise of the focus now in use, or null (D-155)
     get running() { return run !== null; },
   };
 }

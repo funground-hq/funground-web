@@ -76,7 +76,9 @@
 // models worker answers with a message, which this worker handles between two steps, so a result never appears in the middle
 // of a frame: it is pushed into the Session (`push_models` for points, `push_models_mask` for the person's mask), and the
 // sketch's next ml.pose() call reads it. The answer is therefore the newest result the browser has, and may be one frame behind
-// (contract ML3). The mask comes as bytes of the mask's own size (256 x 256); funground (Cairo, in C) stretches it over the picture.
+// (contract ML3). A request says whether the picture is a camera's frame (`moving`): the models worker then follows and steadies the body from
+// one frame to the next (S-328), and a pose answer carries the model's score for each point, which `push_models` hands on as a tuple
+// (body.scores). The mask comes as bytes of the mask's own size (256 x 256); funground (Cairo, in C) stretches it over the picture.
 // ml.words(mic) (S-234) is the same road for sound: a phrase goes out as float32 bytes (`phrase`), the words come back (`push_models_words`).
 // ml.sound(mic) (S-250) sends a window of sound the same way (about twice a second) and gets the model's 521 scores back as float32 bytes
 // (`push_models_sound`); the names are chosen in Python.
@@ -245,7 +247,7 @@ function fetchUrl(address) {
 // run() still runs as a sketch, D-088), and an implicit library is there before the first line runs. And when it is loaded
 // every file goes through its Session. There is no plain-script path in a runner that has funground; a runner
 // without it has nothing but the plain path (plainRun). The two never mix in one worker.
-async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts, packages, install = "on import" }) {
+async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxruntimeOption, modelsScripts: scripts, packages, install = "on import", interrupt }) {
   withFunground = packages === undefined || packages.includes("funground");
   const runtime = new URL(runtimeUrl ?? "runtime/", import.meta.url);
   onnxruntimeUrl = onnxruntimeOption ?? ONNXRUNTIME;
@@ -259,6 +261,10 @@ async function init({ runtimeUrl, pyodideUrl = PYODIDE, onnxruntimeUrl: onnxrunt
     indexURL: pyodideUrl,
     env: { SDL_VIDEODRIVER: "dummy", FUNGROUND_HEADLESS: "1", PYGAME_HIDE_SUPPORT_PROMPT: "1" },
   });
+  if (interrupt) {                                                         // an isolated page: Stop can interrupt Python (see runner.js)
+    interruptFlags = new Int8Array(interrupt);
+    py.setInterruptBuffer(interruptFlags);
+  }
   py.setStdout({ write: writers.stdout.write });
   py.setStderr({ write: writers.stderr.write });
   if (packages !== undefined) await prepareHost(packages, install, pyodideUrl);                // an unknown name stops the start here
@@ -619,13 +625,17 @@ def push_camera(session, pixels, width, height):
     """Hand a camera frame (a Uint8ClampedArray of RGBA) from the page to the session (to_bytes copies it once)."""
     session.push_camera(pixels.to_bytes(), width, height)
 
-def push_models(session, task, key, points, score, width, height):
-    """Hand a model result from the page to the session: points is a Float64Array x0, y0, x1, y1, ... or None for nobody."""
-    flat = None
+def push_models(session, task, key, points, score, width, height, scores=None):
+    """Hand a model result from the page to the session: points is a Float64Array x0, y0, x1, y1, ... or None for nobody; scores
+    (the pose only) is a Float64Array with how sure the model is of each point, or None (S-328)."""
+    flat = sure = None
     if points is not None:
         flat = array("d")
         flat.frombytes(points.to_bytes())
-    session.push_models(task, key, flat, score, width, height)
+    if scores is not None:
+        sure = array("d")
+        sure.frombytes(scores.to_bytes())
+    session.push_models(task, key, flat, score, width, height, tuple(sure) if sure is not None else None)
 
 def push_models_mask(session, task, key, mask, mask_width, mask_height, width, height):
     """Hand the person's mask from the page to the session: mask is a Uint8Array of mask_width * mask_height bytes (to_bytes copies it once)."""
@@ -894,8 +904,8 @@ function startModelsWorker() {
       } else if (message.type === "result" && message.mask) {
         if (session) py.globals.get("push_models_mask")(session, message.task, message.key, message.mask, message.maskWidth, message.maskHeight, message.width, message.height);
       } else if (message.type === "result") {
-        // `points ?? undefined`: Pyodide turns a JavaScript null into its own null object, and funground wants None
-        if (session) py.globals.get("push_models")(session, message.task, message.key, message.points ?? undefined, message.score, message.width, message.height);
+        // `?? undefined`: Pyodide turns a JavaScript null into its own null object, and funground wants None
+        if (session) py.globals.get("push_models")(session, message.task, message.key, message.points ?? undefined, message.score, message.width, message.height, message.scores ?? undefined);
       } else if (message.type === "say") {
         post({ type: "output", stream: "stdout", text: message.text, models: true });   // the download line: a page with onModel shows it itself
       } else if (message.type === "model") {
@@ -904,7 +914,7 @@ function startModelsWorker() {
         session?.models_unavailable(message.task, message.reason);
       }
     } catch (error) {
-      post({ type: "output", stream: "stderr", text: `A model answer could not be used: ${String(error.message ?? error).split("\n").pop()}` });
+      post({ type: "output", stream: "stderr", text: `A model answer could not be used: ${String(error.message ?? error).trimEnd().split("\n").pop()}` });
     }
   };
   modelsWorker.onerror = (e) => post({ type: "output", stream: "stderr", text: `The models worker failed to load: ${e.message}` });
@@ -934,12 +944,29 @@ function event({ kind, x, y, button, key, keyCode, delta }) {
 
 // A learner sees the traceback from their own file down, not the host's frames above it, nor the runner's own (input(): S-272).
 // What the run printed comes first, a last line without a newline too.
+let interruptFlags = null;                                                 // [Pyodide's interrupt signal, the page asked to stop]; null when the page is not isolated
+
 function fail(error) {
+  if (interruptFlags?.[1] && error.type === "KeyboardInterrupt") return;   // the page asked to stop: not the learner's error
   try { flushOutput(); } catch { /* Python itself is broken: the error says why */ }
   const message = String(error.message ?? error).replace(/^ {2}File "<runner>", line \d+, in .*\n(?: {4}.*\n)*/gm, "");
   const first = message.indexOf(`File "${sketchFile}"`);
   const trimmed = first < 0 ? message : "Traceback (most recent call last):\n  " + message.slice(first);
-  post({ type: "error", message: trimmed });
+  post({ type: "error", message: trimmed, fatal: !pythonAlive() });
+}
+
+// After a fatal error inside Pyodide (a wasm trap, out of memory) every later call fails with "Pyodide already fatally failed":
+// this worker can never run again, and the runner must replace it (S-333). A Python exception from the probe (a PythonError,
+// which has the exception's `type`) means Python is alive: on an isolated page the stop signal may still be raised (S-241), and
+// the probe then gets a KeyboardInterrupt. The fatal error is a plain Error. (py.ffi cannot be used here: after a fatal error
+// reading it throws too.)
+function pythonAlive() {
+  try {
+    py.runPython("None");
+    return true;
+  } catch (error) {
+    return typeof error?.type === "string";
+  }
 }
 
 // ---- files the sketch wrote (S-212)
@@ -1046,6 +1073,9 @@ function postCameraRequest(command, fields) {
 // ---- messages
 
 function stop() {
+  // The sketch's finish() runs with interrupts off: the page keeps raising the signal until this worker answers (runner.js),
+  // and a signal inside finish() would cut short what it saves.
+  if (interruptFlags) py.setInterruptBuffer(undefined);
   try {
     session?.stop();
   } catch (error) {
@@ -1054,6 +1084,11 @@ function stop() {
     if (session) sendNewFiles();                                           // what the sketch saved in finish(), before the next run deletes its folder
     session = null;
     flushOutput();                                                         // what finish() printed, before the next run's output
+    if (interruptFlags) {                                                  // interrupts on again for the next run, with nothing pending
+      Atomics.store(interruptFlags, 0, 0);
+      Atomics.store(interruptFlags, 1, 0);
+      py.setInterruptBuffer(interruptFlags);
+    }
     post({ type: "stopped" });
   }
 }

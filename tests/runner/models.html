@@ -8,6 +8,7 @@
 // report: the output of each case, the files it asked for from the model site and the CDN, and when it finished. The model
 // site (huggingface.co) is answered by tools/chrome_page.mjs, which the case controls through setHuggingFace().
 import { createRunner } from "/runner/runner.js";
+import { runFollow } from "/tests/runner/models_follow.js";
 
 const canvas = document.getElementById("canvas");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,6 +28,13 @@ try {
       await window.setHuggingFace(c.hf ?? "files");
       if (c.clear_cache) await caches.delete("funground-models-v1");
       const before = (await window.requestsSoFar()).length;
+      if (c.follow) {            // S-328: a sequence of pictures sent to the models worker itself, no sketch (models_follow.js)
+        result.follow = await runFollow({ ...c.follow, photo: bytesOf(c.files[c.follow.photo_name]) }, c.onnxruntime_url);
+        result.requests = (await window.requestsSoFar()).slice(before).map((r) => ({ url: r.url, status: r.status })).filter((r) => r.url.startsWith("https://"));
+        result.output = [];
+        report.cases.push(result);
+        continue;
+      }
       const runner = await createRunner({
         canvas,
         baseUrl: new URL("/runner/", location.href),

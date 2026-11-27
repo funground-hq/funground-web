@@ -49,6 +49,17 @@ JavaScript (the resizing reproduces Pillow's bicubic). The test passes when Play
 are counted) and the cosine of the two vectors is at least VECTOR_COSINE_BOUND (0.99; spike 24 measured 0.996 for DINOv2). Reading the vector
 from the sketch's own taught set, and not from a separate page, tests the whole road: the request, the page's maths, the answer.
 
+A body in a camera's pictures (S-328) is followed and steadied, and a still picture's is not. The pose model also says how sure it is of each
+point (body.scores): tests/runner/models_sketch.py prints them, and they must be within SCORES_BOUND (0.05) of the desktop's. The case
+"follow" sends the models worker itself (no Python in the page) 24 pictures of standing_woman_640.jpg, moved 3 px to the right each time on a
+black canvas, first as still pictures ("moving": false) and then as a camera's ("moving": true), with a clock of 1/24 s a picture;
+tests/runner/models_follow_desktop.py does the same with funground-ml's _glue.py. For each sequence the "jump" is how far a point's move from
+one picture to the next is from the true move (3, 0), over all 33 points. The test passes when, for both sequences, the detector ran as many
+times as on the desktop, the mean jump is within FOLLOW_JUMP_BOUND_PX (0.5) of the desktop's, and the followed body's mean jump is under the
+still one's. (The desktop measured 4.6 px for a box reused and 1.1 px followed and steadied on a catwalk video, the detector running 5 times and
+then once; this photograph's numbers are in the report.) The pure parts of the same code (Tracker, Smoother, Steadier) are tested without a
+browser by tools/test_follow.mjs.
+
 Cases, run in one Chrome (one temporary profile, so Cache Storage carries over from case to case):
 
   * pose, hand: empty cache. One line "Downloading the {task} model, {n} MB, once. After that the browser keeps a copy.", the
@@ -66,6 +77,9 @@ Cases, run in one Chrome (one temporary profile, so Cache Storage carries over f
     model site, no line, the same names), and the real-time factor; then the fake microphone.
   * teach mobilenet, teach dinov2: empty cache. One line "Downloading the picture model, {n} MB, once. ..." each, one file each, both photographs
     named rightly, the vector compared with the desktop's.
+  * follow road, picture and camera: tests/runner/models_follow_sketch.py moves the photograph the same way for ml.pose(picture) and
+    ml.pose(a camera-like source), the whole road through Python in the page; the camera's mean jump must be under the picture's.
+  * follow: the sequences above, straight to the models worker.
   * speed: answers a second for each task on this machine, with a new picture every frame.
 
 The model site is answered from ml/tests/.models by tools/chrome_page.mjs (the real files, with the real site's headers); --live
@@ -96,6 +110,10 @@ NODE = os.environ.get("NODE", r"C:\sw\nodejs\node.exe")
 FAKE = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
 SKETCHES = REPO / "tests" / "runner"
 TOLERANCE_PX = 5.0
+SCORES_BOUND = 0.05                                  # the most a point's score (body.scores) may differ from the desktop's (S-328; set before measuring)
+FOLLOW_PHOTO = "standing_woman_640.jpg"
+FOLLOW = {"frames": 24, "shift": 3, "left": 20, "width": 740, "height": 960}      # the photograph moves 3 px a picture on a black canvas
+FOLLOW_JUMP_BOUND_PX = 0.5                           # the most the browser's mean jump may differ from the desktop's, for each of the two sequences
 PHOTOS = {"pose": "gandhi_london_rain.jpg", "hand": "standing_woman_640.jpg", "person": "standing_woman_640.jpg", "words": "tts.wav"}
 SIZE_MB = {"pose": 18, "hand": 8, "person": 1, "words": 42, "sound": 16}
 FILES = {"pose": 2, "hand": 2, "person": 1, "words": 3, "sound": 1}          # model files a task downloads
@@ -112,6 +130,10 @@ ORT_FOLDER = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/"
 
 
 # ---- the desktop's numbers
+
+def follow_text(moving: bool) -> str:
+    return f'PHOTO = "{FOLLOW_PHOTO}"\nMOVING = {moving}\n' + (SKETCHES / "models_follow_sketch.py").read_text(encoding="utf-8")
+
 
 def teach_text(model: str) -> str:
     return f"MODEL = {model!r}\nPHOTOS = {TEACH_PHOTOS!r}\n" + (SKETCHES / "models_teach_sketch.py").read_text(encoding="utf-8")
@@ -165,6 +187,17 @@ def desktop_points(ml_python: str, funground: Path, hf_dir: Path, task: str) -> 
     found = parse_points(done.stdout.splitlines())
     if found is None:
         raise SystemExit(f"the desktop found no {task} (exit {done.returncode}): {done.stdout[-500:]} {done.stderr[-800:]}")
+    return found
+
+
+def desktop_follow(ml_python: str, funground: Path, hf_dir: Path) -> dict:
+    """The desktop's numbers for the case "follow": the jump per picture and the detector's runs, still and moving."""
+    arguments = [str(funground / "ml" / "tests" / "data" / FOLLOW_PHOTO), *(str(FOLLOW[k]) for k in ("frames", "shift", "left", "width", "height"))]
+    env = dict(os.environ, FUNGROUND_HEADLESS="1", FUNGROUND_ML_MODELS=str(hf_dir))
+    done = subprocess.run([ml_python, str(SKETCHES / "models_follow_desktop.py"), *arguments], env=env, capture_output=True, text=True, timeout=600)
+    found = parse_json_line(done.stdout.splitlines(), "follow")
+    if found is None:
+        raise SystemExit(f"the desktop measured no follow (exit {done.returncode}): {done.stdout[-500:]} {done.stderr[-800:]}")
     return found
 
 
@@ -299,9 +332,17 @@ def compare(task: str, desktop: dict, play: dict) -> dict:
         return {"problem": "the two have different point names"}
     distances = {n: math.dist(desktop["points"][n], play["points"][n]) for n in names}
     worst = max(distances, key=distances.get)
-    return {"points": len(names), "max_px": round(distances[worst], 3), "worst": worst,
-            "mean_px": round(sum(distances.values()) / len(names), 3),
-            "score_desktop": desktop["score"], "score_play": play["score"]}
+    numbers = {"points": len(names), "max_px": round(distances[worst], 3), "worst": worst,
+               "mean_px": round(sum(distances.values()) / len(names), 3),
+               "score_desktop": desktop["score"], "score_play": play["score"]}
+    if "scores" in desktop:                          # S-328: the pose model's score for each point
+        if sorted(desktop["scores"]) != sorted(play.get("scores", {})):
+            return {"problem": "the browser gave no scores for the points, or other names than the desktop's"}
+        differences = {n: abs(desktop["scores"][n] - play["scores"][n]) for n in names}
+        worst_score = max(differences, key=differences.get)
+        numbers.update({"scores_max_diff": round(differences[worst_score], 5), "scores_worst": worst_score,
+                        "scores_lowest_desktop": round(min(desktop["scores"].values()), 4)})
+    return numbers
 
 
 # ---- the cases
@@ -320,6 +361,11 @@ def cases(data: Path) -> list[dict]:
         files = {photo: base64.b64encode((data / photo).read_bytes()).decode() for photo in TEACH_PHOTOS.values()}
         return {"id": f"teach {model}", "source": teach_text(model), "files": files, "until_output": "^teach ", "wait_s": 300, **extra}
 
+    def follow_road_case(moving: bool) -> dict:
+        photo = {FOLLOW_PHOTO: base64.b64encode((data / FOLLOW_PHOTO).read_bytes()).decode()}
+        return {"id": f"follow road, {'camera' if moving else 'picture'}", "source": follow_text(moving), "files": photo,
+                "until_output": "^follow ", "wait_s": 300}
+
     points = "^points "
     return [
         case("pose", "models_sketch.py", "pose", points, clear_cache=True),
@@ -328,12 +374,16 @@ def cases(data: Path) -> list[dict]:
         case("person", "models_person_sketch.py", "person", "^alpha "),
         case("mask time", "models_mask_time_sketch.py", "person", "^mask to person", files=False),
         case("camera", "models_camera_sketch.py", "pose", "^loaded", files=False),
+        follow_road_case(False),
+        follow_road_case(True),
+        {"id": "follow", "source": "", "files": {FOLLOW_PHOTO: base64.b64encode((data / FOLLOW_PHOTO).read_bytes()).decode()},
+         "follow": {**FOLLOW, "photo_name": FOLLOW_PHOTO}, "onnxruntime_url": ORT_FOLDER},
         case("words", "models_words_sketch.py", "words", "^speed ", wait_s=300, clear_cache=True),
         case("words from the copy", "models_words_sketch.py", "words", "^speed ", wait_s=300, hf="offline"),
         sound_case("sound", data, clear_cache=True),
         sound_case("sound from the copy", data, hf="offline"),
         {"id": "sound microphone", "source": (SKETCHES / "models_microphone_sketch.py").read_text(encoding="utf-8"), "files": {},
-         "until_output": "^microphone ", "wait_s": 120, "hf": "offline"},
+         "until_output": "^microphone ", "wait_s": 120},
         teach_case("mobilenet", clear_cache=True),
         teach_case("dinov2", clear_cache=True),
         case("no connection and no copy", "models_sketch.py", "pose", "could not download", hf="offline", clear_cache=True),
@@ -383,6 +433,8 @@ def problems_download(result: dict, task: str, desktop: dict) -> tuple[list[str]
         out.append(numbers["problem"])
     elif numbers["max_px"] > TOLERANCE_PX:
         out.append(f"the {task} differs from the desktop's by {numbers['max_px']} px at {numbers['worst']} (the limit is {TOLERANCE_PX})")
+    elif numbers.get("scores_max_diff", 0) > SCORES_BOUND:
+        out.append(f"the {task}'s scores differ from the desktop's by {numbers['scores_max_diff']} at {numbers['scores_worst']} (the limit is {SCORES_BOUND})")
     return out, numbers
 
 
@@ -551,8 +603,12 @@ def problems_copy(result: dict, desktop: dict) -> tuple[list[str], dict]:
         out.append("no body was found from the kept copy")
         return out, {}
     numbers = compare("pose", desktop, found)
-    if numbers.get("max_px", 0) > TOLERANCE_PX:
+    if "problem" in numbers:
+        out.append(numbers["problem"])
+    elif numbers.get("max_px", 0) > TOLERANCE_PX:
         out.append(f"differs from the desktop's by {numbers['max_px']} px")
+    elif numbers.get("scores_max_diff", 0) > SCORES_BOUND:
+        out.append(f"the scores differ from the desktop's by {numbers['scores_max_diff']}")
     return out, numbers
 
 
@@ -568,6 +624,48 @@ def problems_camera(result: dict) -> list[str]:
     if model_requests(result):
         out.append("the model site was asked although the copies were kept")
     return out
+
+
+def problems_follow(result: dict, desktop: dict) -> tuple[list[str], dict]:
+    out = [f"error: {result['error']}"] if "error" in result else []
+    found = result.get("follow")
+    if not found:
+        return out + ["no numbers came back"], {}
+    numbers = {}
+    for name in ("still", "moving"):
+        here, there = found[name], desktop[name]
+        numbers[name] = {"jump_mean_play": here["jump_mean"], "jump_mean_desktop": there["jump_mean"],
+                         "jump_max_play": here["jump_max"], "jump_max_desktop": there["jump_max"],
+                         "detector_runs_play": here["detector_runs"], "detector_runs_desktop": there["detector_runs"],
+                         "found_play": here["found"], "found_desktop": there["found"]}
+        if here["found"] != here["pictures"]:
+            out.append(f"{name}: the body was lost in {here['pictures'] - here['found']} of {here['pictures']} pictures")
+        if here["detector_runs"] != there["detector_runs"]:
+            out.append(f"{name}: the detector ran {here['detector_runs']} times, the desktop's {there['detector_runs']}")
+        if abs(here["jump_mean"] - there["jump_mean"]) > FOLLOW_JUMP_BOUND_PX:
+            out.append(f"{name}: the mean jump is {here['jump_mean']} px, the desktop's {there['jump_mean']} (the limit is {FOLLOW_JUMP_BOUND_PX})")
+        if name == "still" and here["scores"] and there["scores"]:
+            numbers[name]["scores_first_picture_max_diff"] = round(max(abs(a - b) for a, b in zip(here["scores"], there["scores"])), 5)
+    if found["moving"]["jump_mean"] >= found["still"]["jump_mean"]:
+        out.append(f"the followed body is not steadier than the still one: {found['moving']['jump_mean']} px and {found['still']['jump_mean']} px")
+    return out, numbers
+
+
+def problems_follow_road(still: dict, camera: dict) -> tuple[list[str], dict]:
+    """The sketch's whole road, a picture and a camera: all pictures answered, and the camera's body steadier than the picture's."""
+    out, numbers = [], {}
+    for name, result in (("picture", still), ("camera", camera)):
+        out += [f"{name}: error: {result['error']}"] if "error" in result else []
+        out += [f"{name}: {line}" for line in stderr_problems(result)]
+        found = parse_json_line(stdout_lines(result), "follow")
+        if found is None:
+            out.append(f"{name}: no numbers were printed: {stdout_lines(result)[-3:]}")
+        elif found["pictures"] != FOLLOW["frames"]:
+            out.append(f"{name}: {found['pictures']} pictures were answered, not {FOLLOW['frames']}")
+        numbers[name] = found
+    if all(numbers.values()) and numbers["camera"]["jump_mean"] >= numbers["picture"]["jump_mean"]:
+        out.append(f"a camera's body is not steadier than a picture's: {numbers['camera']['jump_mean']} px and {numbers['picture']['jump_mean']} px")
+    return out, numbers
 
 
 def problems_sentence(result: dict, expected: re.Pattern, what: str) -> list[str]:
@@ -655,6 +753,10 @@ def main() -> int:
     desktop_named = desktop_sound(args.ml_python, args.funground, hf_dir)
     print("desktop sound:", [(row["clip"], row["name"], [g["name"] for g in row["next"]]) for row in desktop_named], flush=True)
 
+    desktop_followed = desktop_follow(args.ml_python, args.funground, hf_dir) if args.only is None or args.only in "follow" else None
+    if desktop_followed:
+        print("desktop follow:", {k: (v["jump_mean"], v["jump_max"], v["detector_runs"]) for k, v in desktop_followed.items()}, flush=True)
+
     desktop_taught = {model: desktop_teach(args.ml_python, args.funground, hf_dir, model) for model in TEACH_MODELS if args.only is None or args.only in f"teach {model}"}
     print("desktop teach:", {model: (found["guesses"], len(found["vector"])) for model, found in desktop_taught.items()}, flush=True)
 
@@ -706,6 +808,12 @@ def main() -> int:
         check("mask time", found)
     if "camera" in results:
         check("camera", problems_camera(results["camera"]))
+    if "follow road, picture" in results and "follow road, camera" in results:
+        found, summary["follow road"] = problems_follow_road(results["follow road, picture"], results["follow road, camera"])
+        check("follow road", found)
+    if "follow" in results:
+        found, summary["follow"] = problems_follow(results["follow"], desktop_followed)
+        check("follow", found)
     if "no connection and no copy" in results:
         sentence = re.compile(r"^ml\.pose\(\): could not download the pose detector from huggingface\.co \(.+\)\. "
                               r"Run the sketch once while online; after that the browser keeps a copy\.$")
